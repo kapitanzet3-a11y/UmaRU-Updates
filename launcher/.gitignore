@@ -1,0 +1,34 @@
+# Local game data and release artifacts
+*.exe
+*.dll
+*.pyd
+*.zip
+*.7z
+*.usm
+*.diff.png
+*.srchash
+localized_data_ru/
+/data/
+/player_out/
+/publisher/stages/
+build/
+dist/
+stage/
+output/
+pyi-work/
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local settings, signing material and private publication receipts
+.env
+.env.*
+*.key
+*.pfx
+*.p12
+*.pem
+settings.json
+upload.json
+report.local.json
+published.json
