@@ -143,6 +143,33 @@ class TransportTests(unittest.TestCase):
         self.publish("2026.11.03-1202", {c: b"video"}, delta=("2026.11.03-1201", new))
         self.assertEqual(set(updates.resolve(self.data, self.channel).pack.entries), {c})
 
+    def cached_ids(self):
+        root = updates._cache_root(self.channel)
+        return sorted(p.name for p in root.iterdir() if p.is_dir() and len(p.name) == 64)
+
+    def current_id(self):
+        return core.read_json(updates._cache_root(self.channel) / "current.json")["id"]
+
+    def test_only_current_pack_is_kept(self):
+        for minute in range(3):
+            files = {"localized_data_ru/a.json": f"v{minute}".encode()}
+            self.publish(f"2026.11.03-120{minute}", files)
+            self.assertEqual(updates.resolve(self.data, self.channel).state, "updated")
+            self.assertEqual(self.cached_ids(), [self.current_id()])
+
+    def test_failed_cleanup_does_not_fail_promoted_update(self):
+        self.publish("2026.11.03-1200", {"localized_data_ru/a.json": b"old"})
+        self.assertEqual(updates.resolve(self.data, self.channel).state, "updated")
+        self.publish("2026.11.03-1201", {"localized_data_ru/a.json": b"new"})
+        with patch.object(updates, "_safe_remove", side_effect=PermissionError("pack.zip is open")):
+            result = updates.resolve(self.data, self.channel)
+        self.assertEqual(result.state, "updated")
+        self.assertEqual(result.pack.version, "2026.11.03-1201")
+        self.assertEqual(len(self.cached_ids()), 2)
+        self.publish("2026.11.03-1202", {"localized_data_ru/a.json": b"newer"})
+        self.assertEqual(updates.resolve(self.data, self.channel).state, "updated")
+        self.assertEqual(self.cached_ids(), [self.current_id()])
+
     def test_corrupt_remote_retains_last_good_and_offline(self):
         old = {"localized_data_ru/a.json": b"old"}
         self.publish("2026.11.03-1200", old)

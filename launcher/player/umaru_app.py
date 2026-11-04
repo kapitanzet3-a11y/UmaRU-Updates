@@ -38,6 +38,10 @@ from _launcher_version import APP_VERSION  # noqa: E402
 
 APP_TITLE = "Uma RU — русификатор Umamusume"
 SHORTCUT_NAME = "Играть на русском (Uma RU)"
+INSTANCE_MUTEX = "UmaRUPlayerSingleInstance"     # это же имя проверяет деинсталлятор в setup/UmaRU.iss
+SHOW_EVENT = "UmaRUPlayerShowWindow"             # вторая копия просит открытое окно показаться
+PLAY_EVENT = "UmaRUPlayerPlay"                   # ... показаться и запустить игру (ярлык с --play)
+LAUNCHER_DOWNLOADS = Path(tempfile.gettempdir()) / "UmaRU-launcher"
 _ADMIN_HINT = ("\nЗапустите UmaRU.exe от имени администратора (правый щелчок по нему → «Запуск от имени администратора») "
                "и повторите удаление.")
 log = logging.getLogger("umaru")
@@ -61,7 +65,12 @@ def program_info():
         return None
     folder = Path(env) if env else app_dir()
     return {"dir": folder, "exe": Path(sys.executable) if frozen else folder / "UmaRU.exe",
-            "shortcut": SHORTCUT_NAME, "pid": os.getpid()}
+            "shortcut": SHORTCUT_NAME, "pid": os.getpid(), "uninstaller": core.find_uninstaller(folder)}
+
+
+def hachimi_installer():
+    """Установщик Hachimi рядом с программой: им снимаем Hachimi, даже если пакета перевода в кэше уже нет."""
+    return pack_root() / "hachimi_installer.exe"
 
 
 def setup_logging():
@@ -123,7 +132,7 @@ def run_cli(args, pack):
         if args.update_cache and not online:
             raise core.UmaError("Для этого мастера не задан канал обновлений.")
         result['pack'] = pack.version if pack else None
-        ctx = core.Context(game, pack, online=online)
+        ctx = core.Context(game, pack, online=online, installer=hachimi_installer())
         if args.update_cache:
             if result.get('update_state') not in ('updated', 'current'):
                 raise core.UmaError(result.get('update_message') or 'Не удалось проверить обновления.')
@@ -144,7 +153,8 @@ def run_cli(args, pack):
             result["done"] = core.uninstall(ctx)
         elif args.uninstall_all:
             result["done"], removal = core.uninstall_all(ctx, None if args.keep_program else program_info())
-            result["program_removal"] = "scheduled" if removal else "none"
+            result["program_removal"] = ("uninstaller" if removal and removal.get("uninstaller")
+                                         else "scheduled" if removal else "none")
         if args.install or args.repair or args.uninstall or args.uninstall_all:
             after = core.diagnose(core.Context(core.find_game(args.game_dir), pack, online=online), deep=True)
             result["mode_after"] = after.mode
@@ -155,7 +165,7 @@ def run_cli(args, pack):
     if args.json:
         Path(args.json).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     if removal:
-        core.schedule_removal(*removal)      # удалит программу, когда этот процесс завершится
+        core.schedule_program_removal(removal)      # удалит программу, когда этот процесс завершится
     return code
 
 
@@ -196,6 +206,7 @@ def build_window(args, pack):
             self.channel_checked = False
             self.channel_result = None
             self.reveal_job = None
+            self.play_requested = False   # ярлык «Играть» нажали, пока окно уже было открыто
             K.center_window(self, 560, 600)
             self.minsize(K.px(520), K.px(300))
             self._build()
@@ -294,6 +305,9 @@ def build_window(args, pack):
 
         def _poll(self):
             self.after(80, self._poll)
+            show, play = take_instance_requests()
+            if show:
+                self._on_second_launch(play)
             for _ in range(200):
                 try:
                     fn, a = self.q.get_nowait()
@@ -342,6 +356,31 @@ def build_window(args, pack):
             self.reveal_job = None
             if self.busy and args.play and not self.winfo_viewable():
                 self.deiconify()
+
+        def _bring_to_front(self):
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)    # Windows не всегда даёт фокус чужому окну: поднимаем ненадолго поверх всех
+            self.after(300, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+
+        def _on_second_launch(self, play):
+            """Программу запустили ещё раз (ярлык, меню «Пуск»), пока это окно открыто: показываемся, а для ярлыка
+            «Играть» (--play) проверяем игру и запускаем её, как сделала бы новая копия."""
+            self._bring_to_front()
+            if not play or self.busy or self.report is None:
+                return    # окно занято установкой или первой проверкой — человек видит, что происходит
+            self.play_requested = True
+            self.banner_note = None
+            self.refresh()
+
+        def _play_after_request(self):
+            mode = self.report.mode
+            if mode in ("ok", "installed_only"):
+                self._launch()
+            elif mode in ("repair", "update"):
+                self.apply(self.report.plan, then_play=True)
+            # остальное (нет игры, игра запущена, Steam обновляет…) решает человек: окно уже на виду
 
         def toggle_log(self, show=None):
             self.log_visible = (not self.log_visible) if show is None else show
@@ -437,8 +476,7 @@ def build_window(args, pack):
                     self.launcher_notice("err", f"Не удалось открыть установщик. {exc}")
                     return
                 self.destroy()
-            directory = Path(tempfile.gettempdir()) / "UmaRU-launcher"
-            self.run_bg(lambda: launcher.download(offer, directory, progress), downloaded)
+            self.run_bg(lambda: launcher.download(offer, LAUNCHER_DOWNLOADS, progress), downloaded)
 
         def refresh(self):
             if self.busy:
@@ -465,6 +503,7 @@ def build_window(args, pack):
 
         def _after_refresh(self, result, error):
             self.set_busy(False)
+            play_requested, self.play_requested = self.play_requested, False   # просьба действует на одну проверку
             if error is not None:
                 self.deiconify()
                 self.banner.show("err", f"Не удалось проверить игру: {error}")
@@ -485,6 +524,8 @@ def build_window(args, pack):
             if not self.auto_done:
                 self.auto_done = True
                 self._auto()
+            elif play_requested:
+                self._play_after_request()
             elif args.shot and not self.busy and not getattr(self, "_shot_scheduled", False):
                 self._shot_scheduled = True   # после автоматической починки — снимок уже готового состояния
                 self.after(1500, self._grab_and_quit)
@@ -724,7 +765,7 @@ def build_window(args, pack):
                                                   "к исходному виду. Саму игру это не затронет, а программа останется: "
                                                   "русификатор можно будет поставить снова.", icon="warning"):
                 return
-            ctx = core.Context(self.game, self.pack_)
+            ctx = core.Context(self.game, self.pack_, installer=hachimi_installer())
             self.set_busy(True, "Удаляю…")
 
             def done(result, error):
@@ -744,16 +785,20 @@ def build_window(args, pack):
             lines = []
             if self.game is not None:
                 lines.append("• Hachimi и файлы перевода — из папки игры (игра станет такой, как была до русификатора);")
+            installed = program is not None and program.get("uninstaller") is not None
             if program is not None:
-                lines += [f"• ярлык «{SHORTCUT_NAME}» с рабочего стола;", "• настройки и журнал программы;",
+                lines += [f"• ярлык «{SHORTCUT_NAME}» с рабочего стола;",
+                          "• настройки, журнал и скачанный перевод;" if installed else "• настройки и журнал программы;",
                           f"• сама программа — папка {program['dir']}."]
             else:
                 lines.append("• ярлык и настройки программы (саму программу из исходников не трогаем).")
+            again = ("заново установить программу (UmaRU-Setup.exe)." if installed
+                     else "заново распаковать архив с программой.")
             if not messagebox.askyesno(APP_TITLE, "Удалить всё?\n\n" + "\n".join(lines) + "\n\nСаму игру и ваш прогресс в ней это не "
-                                                  "затронет. Чтобы вернуть русификатор, нужно будет заново распаковать архив.",
+                                                  f"затронет. Чтобы вернуть русификатор, нужно будет {again}",
                                        icon="warning"):
                 return
-            ctx = core.Context(self.game, self.pack_)
+            ctx = core.Context(self.game, self.pack_, installer=hachimi_installer())
             self.set_busy(True, "Удаляю…")
 
             def done(result, error):
@@ -770,7 +815,7 @@ def build_window(args, pack):
                     self.refresh()
                     return
                 messagebox.showinfo(APP_TITLE, "Готово.\n\n" + "\n".join("• " + x for x in done_lines) + "\n\nОкно сейчас закроется.")
-                core.schedule_removal(*removal)      # помощник дождётся выхода и удалит папку программы
+                core.schedule_program_removal(removal)   # помощник дождётся выхода и удалит программу
                 self.destroy()
             self.run_bg(lambda: core.uninstall_all(ctx, program), done)
 
@@ -820,14 +865,60 @@ def build_window(args, pack):
 
 # ---------------------------------------------------------------- вход
 
+def _kernel32():
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+    k.CreateMutexW.restype = ctypes.c_void_p
+    k.CreateEventW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_wchar_p)
+    k.CreateEventW.restype = ctypes.c_void_p
+    k.OpenEventW.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_wchar_p)
+    k.OpenEventW.restype = ctypes.c_void_p
+    k.SetEvent.argtypes = (ctypes.c_void_p,)
+    k.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
+    k.WaitForSingleObject.restype = ctypes.c_ulong
+    k.CloseHandle.argtypes = (ctypes.c_void_p,)
+    return k
+
+
 def single_instance():
-    """Не запускаем вторую копию окна (двойной щелчок по ярлыку): True — мы первые."""
+    """Не запускаем вторую копию окна (двойной щелчок по ярлыку): True — мы первые. Первая копия заводит события,
+    через которые следующие копии просят её показаться (notify_running_window)."""
     try:
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "UmaRUPlayerSingleInstance")
+        k = _kernel32()
+        handle = k.CreateMutexW(None, False, INSTANCE_MUTEX)
+        first = ctypes.get_last_error() != 183          # ERROR_ALREADY_EXISTS
         single_instance.handle = handle
-        return ctypes.windll.kernel32.GetLastError() != 183
+        if first:
+            single_instance.kernel = k
+            single_instance.events = {name: k.CreateEventW(None, False, False, name) for name in (SHOW_EVENT, PLAY_EVENT)}
+        return first
     except Exception:
         return True
+
+
+def notify_running_window(play):
+    """Вторая копия: попросить открытое окно выйти на передний план, а для ярлыка «Играть» (--play) — ещё и запустить игру."""
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)   # ASFW_ANY: иначе Windows не даст первой копии забрать фокус
+        k = _kernel32()
+        handle = k.OpenEventW(0x0002, False, PLAY_EVENT if play else SHOW_EVENT)   # EVENT_MODIFY_STATE
+        if handle:
+            k.SetEvent(handle)
+            k.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def take_instance_requests():
+    """Первая копия: пришли ли просьбы от следующих копий -> (показать окно, запустить игру). События сбрасываются сами."""
+    k, events = getattr(single_instance, "kernel", None), getattr(single_instance, "events", {})
+    if k is None:
+        return False, False
+    try:
+        fired = {name for name, handle in events.items() if handle and k.WaitForSingleObject(handle, 0) == 0}
+    except Exception:  # noqa: BLE001
+        return False, False
+    return bool(fired), PLAY_EVENT in fired
 
 
 def main(argv=None):
@@ -857,7 +948,9 @@ def main(argv=None):
     if args.check or args.update_cache or args.install or args.repair or args.uninstall or args.uninstall_all:
         return run_cli(args, pack)
     if not args.elevated and not args.shot and not single_instance():
+        notify_running_window(args.play)
         return 0
+    launcher.cleanup_downloads(LAUNCHER_DOWNLOADS)
     try:
         app = build_window(args, pack)
         app.mainloop()

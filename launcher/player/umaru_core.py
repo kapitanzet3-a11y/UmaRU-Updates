@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Uma RU Player — ядро программы для игроков: найти игру, поставить/починить Hachimi, разложить готовый перевод.
 
-Только стандартная библиотека (программа собирается в один exe). Никакого API и сети: перевод лежит рядом с программой
-готовым («пакет»: data\\pack.json + data\\pack.zip), Hachimi ставит его собственный установщик (data\\hachimi_installer.exe).
+Только стандартная библиотека (программа собирается в один exe). Само ядро в сеть не ходит: оно раскладывает готовый
+«пакет» (pack.json + pack.zip). В установленной программе пакет скачивает и проверяет umaru_updates.py в кэш
+%LOCALAPPDATA%\\UmaRU\\updates, в портативной сборке он лежит рядом с программой в data\\. Hachimi ставит его собственный
+установщик (data\\hachimi_installer.exe).
 
 Как устроена установка Hachimi Edge для Steam-версии (проверено на копии игры, результат совпал с настоящей
 установкой байт в байт): `hachimi_installer.exe install --install-dir <игра> --explicit-target cri_mana_vpx.dll`
@@ -508,7 +510,8 @@ def install_pack(game_dir, pack, rels, progress=None):
             names = set(zf.namelist())
             for n, rel in enumerate(rels, 1):
                 if rel not in names:
-                    raise UmaError(f"В пакете нет файла {rel}: архив неполный, скачайте программу заново.")
+                    raise UmaError(f"В пакете перевода нет файла {rel}. Нажмите «Обновления перевода» "
+                                   "или переустановите программу.")
                 size, sha = pack.entries[rel]
                 target = safe_join(base, rel, for_write=True)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -531,7 +534,8 @@ def install_pack(game_dir, pack, rels, progress=None):
     except PermissionError as e:
         raise NeedAdmin("В папку игры нельзя записывать без прав администратора.") from e
     except zipfile.BadZipFile as e:
-        raise UmaError("Файл pack.zip повреждён: скачайте программу заново.") from e
+        raise UmaError("Архив перевода pack.zip повреждён. Нажмите «Обновления перевода» "
+                       "или переустановите программу.") from e
 
 
 # ---------------------------------------------------------------- config.json Hachimi
@@ -608,6 +612,7 @@ class Context:
     game: object = None
     pack: object = None
     online: bool = False
+    installer: object = None    # установщик Hachimi на случай, если пакета нет (кэш обновлений удалён или не скачан)
 
 
 def keep_installed_translation(state, pack):
@@ -810,7 +815,8 @@ def _apply_plan(ctx, plan, progress=None, deep=False):
         a, b = spans["hachimi"]
         report(a, "Устанавливаем Hachimi…")
         if pack is None or not pack.installer.is_file():
-            raise UmaError("Нет установщика Hachimi рядом с программой: скачайте программу заново.")
+            raise UmaError("Нет установщика Hachimi рядом с программой (data\\hachimi_installer.exe). "
+                           "Переустановите программу.")
         check_writable(game.path)
         exe, old = game.path / GAME_EXE, game.path / OLD_EXE
         stub_copy = None
@@ -894,12 +900,15 @@ def _uninstall(ctx, remove_translation=True, progress=None):
     if process_running():
         raise UmaError("Игра запущена. Закройте её и повторите.")
     done = []
-    installer = pack.installer if pack else None
+    installer = pack.installer if pack else ctx.installer
     hs = hachimi_state(game.path)
     exe, old, dll = game.path / GAME_EXE, game.path / OLD_EXE, game.path / PROXY_DLL
-    if hs.kind == "ok" and installer is not None and installer.is_file():
-        code, _out = run_installer(installer, game.path, "uninstall")   # вернёт заглушку Steam на место exe
-        done.append("Hachimi удалён" if code == 0 else f"Установщик Hachimi вернул код {code}")
+    if hs.kind == "ok":
+        if installer is not None and Path(installer).is_file():
+            code, _out = run_installer(installer, game.path, "uninstall")   # вернёт заглушку Steam на место exe
+            done.append("Hachimi удалён" if code == 0 else f"Установщик Hachimi вернул код {code}")
+        else:
+            done.append("Hachimi остался в папке игры: рядом с программой нет установщика Hachimi")
     elif hs.kind in ("stub_restored", "dll_missing"):
         # exe уже оригинальный (после обновления игры) или Hachimi без библиотеки: убираем остатки сами. Старый .old.exe при
         # обновлении устарел — выбросить, а не возвращать поверх нового exe.
@@ -1025,24 +1034,14 @@ def program_items(program_dir, exe_path, pack=None):
     return items, dirs, left
 
 
-def schedule_removal(items, dirs=(), pid=None):
-    """Отдельный скрытый процесс: ждёт, пока завершится процесс pid (сама программа — пока она работает, Windows не даёт
-    удалить её exe), удаляет items, затем пустые папки из dirs. Пути передаются через переменные окружения, а не в тексте
-    команды. Возвращает сразу."""
-    script = ("$ErrorActionPreference='SilentlyContinue';"
-              "$p=[int]$env:UMARU_WAIT_PID;"
-              "if($p -gt 0){for($i=0;$i -lt 1500;$i++){if(-not (Get-Process -Id $p)){break};Start-Sleep -Milliseconds 200}};"
-              "Start-Sleep -Milliseconds 500;"
-              "$items=@($env:UMARU_ITEMS -split '\\|' | Where-Object {$_});"
-              "$dirs=@($env:UMARU_DIRS -split '\\|' | Where-Object {$_});"
-              "for($t=0;$t -lt 40;$t++){$left=0;"
-              "foreach($x in $items){if(Test-Path -LiteralPath $x){Remove-Item -LiteralPath $x -Recurse -Force;"
-              "if(Test-Path -LiteralPath $x){$left++}}};"
-              "if($left -eq 0){break};Start-Sleep -Milliseconds 750};"
-              "foreach($d in $dirs){if((Test-Path -LiteralPath $d) -and -not (Get-ChildItem -LiteralPath $d -Force | "
-              "Select-Object -First 1)){Remove-Item -LiteralPath $d -Force}}")
-    env = dict(os.environ, UMARU_WAIT_PID=str(pid or 0), UMARU_ITEMS="|".join(str(p) for p in items),
-               UMARU_DIRS="|".join(str(p) for p in dirs))
+_WAIT_FOR_PID = ("$ErrorActionPreference='SilentlyContinue';"
+                 "$p=[int]$env:UMARU_WAIT_PID;"
+                 "if($p -gt 0){for($i=0;$i -lt 1500;$i++){if(-not (Get-Process -Id $p)){break};Start-Sleep -Milliseconds 200}};"
+                 "Start-Sleep -Milliseconds 500;")
+
+
+def _spawn_hidden_powershell(script, env):
+    """Скрытый PowerShell, который переживёт закрытие программы. Пути передаются через переменные окружения env."""
     cmd = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
            "-Command", script]
     base = NO_WINDOW | 0x200                    # CREATE_NEW_PROCESS_GROUP
@@ -1054,14 +1053,61 @@ def schedule_removal(items, dirs=(), pid=None):
         subprocess.Popen(cmd, creationflags=base, **kwargs)                 # задание не разрешает отделяться — без этого флага
 
 
+def find_uninstaller(program_dir):
+    """Деинсталлятор Inno Setup (unins000.exe рядом с unins000.dat), если программа установлена установщиком, иначе None."""
+    try:
+        for exe in sorted(Path(program_dir).glob("unins???.exe")):
+            if exe.is_file() and exe.with_suffix(".dat").is_file():
+                return exe
+    except OSError:
+        pass
+    return None
+
+
+def schedule_uninstaller(uninstaller, pid=None):
+    """Отдельный скрытый процесс: ждёт, пока завершится процесс pid, и запускает деинсталлятор Inno Setup без повторного
+    вопроса (/SILENT: окно с ходом удаления видно). Он сам уберёт программу, ярлыки, запись в «Установке и удалении
+    программ» и %LOCALAPPDATA%\\UmaRU. Возвращает сразу."""
+    script = _WAIT_FOR_PID + "Start-Process -FilePath $env:UMARU_UNINSTALLER -ArgumentList '/SILENT'"
+    _spawn_hidden_powershell(script, dict(os.environ, UMARU_WAIT_PID=str(pid or 0), UMARU_UNINSTALLER=str(uninstaller)))
+
+
+def schedule_program_removal(plan):
+    """Выполнить план удаления программы из uninstall_all(): через деинсталлятор или удалением файлов по списку."""
+    if plan.get("uninstaller"):
+        schedule_uninstaller(plan["uninstaller"], plan.get("pid"))
+    else:
+        schedule_removal(plan["items"], plan.get("dirs", ()), plan.get("pid"))
+
+
+def schedule_removal(items, dirs=(), pid=None):
+    """Отдельный скрытый процесс: ждёт, пока завершится процесс pid (сама программа — пока она работает, Windows не даёт
+    удалить её exe), удаляет items, затем пустые папки из dirs. Пути передаются через переменные окружения, а не в тексте
+    команды. Возвращает сразу."""
+    script = (_WAIT_FOR_PID +
+              "$items=@($env:UMARU_ITEMS -split '\\|' | Where-Object {$_});"
+              "$dirs=@($env:UMARU_DIRS -split '\\|' | Where-Object {$_});"
+              "for($t=0;$t -lt 40;$t++){$left=0;"
+              "foreach($x in $items){if(Test-Path -LiteralPath $x){Remove-Item -LiteralPath $x -Recurse -Force;"
+              "if(Test-Path -LiteralPath $x){$left++}}};"
+              "if($left -eq 0){break};Start-Sleep -Milliseconds 750};"
+              "foreach($d in $dirs){if((Test-Path -LiteralPath $d) -and -not (Get-ChildItem -LiteralPath $d -Force | "
+              "Select-Object -First 1)){Remove-Item -LiteralPath $d -Force}}")
+    env = dict(os.environ, UMARU_WAIT_PID=str(pid or 0), UMARU_ITEMS="|".join(str(p) for p in items),
+               UMARU_DIRS="|".join(str(p) for p in dirs))
+    _spawn_hidden_powershell(script, env)
+
+
 def uninstall_all(ctx, program=None, progress=None):
     """Полное удаление: Hachimi и перевод из папки игры (как uninstall), ярлык на рабочем столе и, если задан program,
     сама программа с её настройками и журналом. Саму программу удаляет не эта функция, а отдельный процесс после выхода:
-    функция только готовит план и возвращает его вторым значением, а вызывающий запускает schedule_removal(*план), когда
-    окно уже можно закрывать.
+    функция только готовит план и возвращает его вторым значением, а вызывающий запускает
+    schedule_program_removal(план), когда окно уже можно закрывать.
 
-    program = {"dir": папка программы, "exe": путь к её exe, "shortcut": имя ярлыка, "pid": номер процесса программы}
-    или None (программу оставить: убрать только то, что в игре и на рабочем столе).
+    program = {"dir": папка программы, "exe": путь к её exe, "shortcut": имя ярлыка, "pid": номер процесса программы,
+    "uninstaller": unins000.exe или None} или None (программу оставить: убрать только то, что в игре и на рабочем столе).
+    Если программа поставлена установщиком, её удаляет его деинсталлятор: иначе в Windows остались бы запись
+    в «Установке и удалении программ», ярлык в «Пуске» и unins000.exe.
     -> (список «что сделано», план удаления программы или None)"""
     done = []
     if ctx.game is not None:
@@ -1072,17 +1118,21 @@ def uninstall_all(ctx, program=None, progress=None):
         return done, None
     if remove_shortcut(program.get("shortcut") or "", Path(program["exe"]).name):
         done.append("Ярлык убран с рабочего стола")
-    items, dirs, left = program_items(program["dir"], program["exe"], ctx.pack)
-    items.append(app_home())                         # настройки и журнал: журнал открыт у нас, поэтому удалит помощник
     for h in list(logging.getLogger("umaru").handlers):
         try:
             h.flush()
         except Exception:  # noqa: BLE001
             pass
+    pid = program.get("pid") or os.getpid()
+    if program.get("uninstaller"):
+        done.append("Программу, её настройки и кэш перевода удалит деинсталлятор Windows сразу после закрытия окна")
+        return done, {"uninstaller": Path(program["uninstaller"]), "pid": pid}
+    items, dirs, left = program_items(program["dir"], program["exe"], ctx.pack)
+    items.append(app_home())                         # настройки и журнал: журнал открыт у нас, поэтому удалит помощник
     done.append("Программа и её настройки будут удалены сразу после закрытия окна")
     if left:
         done.append("В папке программы лежат чужие файлы, они остаются: " + ", ".join(sorted(p.name for p in left)[:5]))
-    return done, (items, dirs, program.get("pid") or os.getpid())
+    return done, {"items": items, "dirs": dirs, "pid": pid}
 
 
 def diagnostics_text(report, pack=None):

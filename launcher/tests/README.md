@@ -8,7 +8,9 @@ python -B -m unittest discover -s launcher/tests -p 'test_*.py' -v
 
 The suites cover launcher manifest signatures and verified setup downloads,
 explicit update consent in the Tk window, local HTTP update transport and cache
-fallbacks, offline publication with mocked GitHub calls, and safe game writes.
+fallbacks and pruning of old cached packs, offline publication with mocked
+GitHub calls, safe game writes, and uninstall hand-off to the Inno uninstaller
+with cleanup of old launcher downloads.
 They create synthetic data in temporary directories under `launcher/tests` and
 remove it afterward. `test_launcher_auth` uses Windows PowerShell to generate an
 ephemeral RSA key. `test_safe_apply` requires Windows junction support. The Tk

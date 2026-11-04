@@ -13,8 +13,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import struct
+import time
 import urllib.error
 import uuid
 from dataclasses import dataclass, field
@@ -28,6 +30,7 @@ MAX_MANIFEST = 16 * 1024
 MAX_SETUP = 1024**3
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
+DOWNLOAD_DIR = re.compile(r"^umaru-launcher-[0-9a-f]{32}$")
 
 # Set to the public material printed by sign-launcher.ps1 -Init. An unset key
 # fails closed; it must never be fetched from the update server.
@@ -227,3 +230,28 @@ def download(offer: Offer, directory: str | Path, progress=None) -> Path:
         raise LauncherUpdateError("Не удалось скачать и проверить установщик") from exc
     finally:
         partial.unlink(missing_ok=True)
+
+
+def cleanup_downloads(directory: str | Path, max_age: float = 3600) -> int:
+    """Remove installer folders left by earlier downloads; return how many were removed.
+
+    The installer cannot delete itself, so each update leaves one folder. Only
+    folders created by download() and older than max_age are touched: a recent
+    one may still belong to a running setup.
+    """
+    try:
+        children = list(Path(directory).iterdir())
+    except OSError:
+        return 0
+    now = time.time()
+    removed = 0
+    for child in children:
+        try:
+            if (not DOWNLOAD_DIR.fullmatch(child.name) or child.is_symlink() or not child.is_dir()
+                    or now - child.stat().st_mtime < max_age):
+                continue
+            shutil.rmtree(child)
+            removed += 1
+        except OSError:
+            continue
+    return removed

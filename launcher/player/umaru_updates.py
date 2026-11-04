@@ -465,11 +465,27 @@ def _promote(root, stage, manifest, installer):
     else:
         os.replace(stage, final)
     core.write_json(root / "current.json", {"id": identity, "version": manifest["version"]})
-    dirs = sorted((p for p in root.iterdir() if p.is_dir() and re.fullmatch(r"[0-9a-f]{64}", p.name)
-                   and p != final), key=lambda p: p.stat().st_mtime, reverse=True)
-    for p in dirs[2:]:
-        _safe_remove(root, p)
+    _prune(root, final)
     return core.Pack(final, manifest, final / "pack.zip", installer)
+
+
+def _prune(root, keep):
+    """Remove every cached pack except keep. Each full pack is hundreds of MB.
+
+    Older packs are never read again: a delta starts from the current pack or
+    from files already installed in the game. Pruning is best effort, so a pack
+    that another process still has open stays until the next update instead of
+    failing an update that was already promoted.
+    """
+    try:
+        old = [p for p in root.iterdir() if p.is_dir() and re.fullmatch(r"[0-9a-f]{64}", p.name) and p != keep]
+    except OSError:
+        return
+    for p in old:
+        try:
+            _safe_remove(root, p)
+        except (OSError, UpdateError):
+            pass
 
 
 @contextmanager

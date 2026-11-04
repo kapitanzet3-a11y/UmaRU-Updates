@@ -39,6 +39,9 @@ WizardImageStretch=yes
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
+[Messages]
+ConfirmUninstall=Удалить %1?%n%nHachimi и русский перевод тоже будут убраны из папки игры, игра вернётся к исходному виду. Сама игра и ваш прогресс в ней не пострадают.
+
 [Files]
 Source: "{#SetupRoot}\stage\UmaRU\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
@@ -54,11 +57,60 @@ Filename: "{app}\UmaRU.exe"; Description: "Открыть Uma RU Player"; Flags:
 
 [UninstallDelete]
 Type: files; Name: "{app}\data\update-channel.json"
+; Настройки, журнал и кэш скачанного перевода (сотни МБ) из umaru_core.app_home().
+Type: filesandordirs; Name: "{localappdata}\UmaRU"
 
 [Code]
+const
+  { То же имя, что INSTANCE_MUTEX в player/umaru_app.py: мьютекс держит открытое окно Uma RU Player. }
+  PlayerMutex = 'UmaRUPlayerSingleInstance';
+
 var
   VariantPage: TInputOptionWizardPage;
   PreviousChannel: Boolean;
+
+function InitializeUninstall: Boolean;
+var
+  I: Integer;
+begin
+  Result := True;
+  { После «Удалить всё» окно закрывается само, но может не успеть: даём ему три секунды. }
+  for I := 1 to 15 do
+  begin
+    if not CheckForMutexes(PlayerMutex) then Exit;
+    Sleep(200);
+  end;
+  { Открытое окно держит UmaRU.exe и свои библиотеки: удалить их не получится. }
+  while CheckForMutexes(PlayerMutex) do
+  begin
+    if UninstallSilent or (MsgBox('Закройте окно Uma RU Player и нажмите «ОК».', mbError, MB_OKCANCEL) <> IDOK) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Player: String;
+  ResultCode: Integer;
+begin
+  if CurUninstallStep <> usUninstall then Exit;
+  Player := ExpandConstant('{app}\UmaRU.exe');
+  if not FileExists(Player) then Exit;
+  { Hachimi и перевод лежат в папке игры, а не в папке программы: убираем их, пока программа ещё на месте.
+    --keep-program: саму программу удалит этот деинсталлятор. }
+  if Exec(Player, '--uninstall-all --keep-program', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode)
+     and (ResultCode = 0) then
+    Exit;
+  if UninstallSilent then Exit;
+  if MsgBox('Не удалось убрать Hachimi и перевод из папки игры. Обычно так бывает, если игра запущена.' + #13#10#13#10 +
+            '«Да» — всё равно удалить программу (Hachimi и перевод останутся в игре).' + #13#10 +
+            '«Нет» — отменить удаление: закройте игру и запустите удаление снова.',
+            mbConfirmation, MB_YESNO) = IDNO then
+    Abort;
+end;
 
 function InitializeSetup: Boolean;
 begin
