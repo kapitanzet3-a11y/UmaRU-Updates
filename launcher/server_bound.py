@@ -15,7 +15,16 @@ from zipfile import ZipFile, BadZipFile
 GAME = Path(os.environ.get("UMA_RU_GAME_DIR") or ".")
 EN_BASE = GAME / "hachimi/ru_translator/data/en_dicts/localize_dict.json"
 NATIVE_DUMP = GAME / "hachimi/localize_dump.json"
-NATIVE_FALLBACK = ("SingleMode418033", "Common0134")
+# Defaults the game sends to the server as names. A translated value must not
+# replace them: Cyrillic or text over the field limit fails the request
+# (error 205; error 395 when saving an autoplay strategy).
+NATIVE_FALLBACK = (
+    "SingleMode418033", "Common0134",
+    "SingleModeAutoPlay425023",   # new autoplay strategy name, 1-12 characters
+    "SingleModeAutoPlay425024",   # its description, 1-24 characters
+    "PracticeRace400200",         # practice race list name
+    "PracticeRace400201",         # name of a copied list
+)
 UMATL_DEFAULTS = ("Character701018", "RoomMatch0023", "RoomMatch0024")
 DEFAULT_NAME_RE = re.compile(r"(?:プラン|マイローテ|セット|編成)\{\d\}")
 CYRILLIC_RE = re.compile(r"[\u0400-\u052f]")
