@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,16 @@ def program_info():
     folder = Path(env) if env else app_dir()
     return {"dir": folder, "exe": Path(sys.executable) if frozen else folder / "UmaRU.exe",
             "shortcut": SHORTCUT_NAME, "pid": os.getpid(), "uninstaller": core.find_uninstaller(folder)}
+
+
+def hachimi_version():
+    """Версия Hachimi Edge, которую ставит лаунчер (из data\\hachimi_installer.txt: «… (v0.33.1) …»)."""
+    try:
+        text = (pack_root() / "hachimi_installer.txt").read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    match = re.search(r"\(v(\d+(?:\.\d+)+)\)", text)
+    return match[1] if match else ""
 
 
 def hachimi_installer():
@@ -236,7 +247,6 @@ def build_window(args, pack):
             self.busy = False
             self.auto_done = False
             self.banner_note = None
-            self.last_summary = ("busy", "Проверяю…")   # главный статус, к которому окно вернётся после занятости
             self.raw_pack = pack           # пакет как скачан; self.pack_ — он же по выбору языков (compose_pack)
             self.extras = {}               # дополнительные пакеты (английские комиксы)
             self.offers = None             # что канал предлагает докачать; None — канал ещё не проверяли
@@ -286,40 +296,47 @@ def build_window(args, pack):
             self.banner = K.Banner(outer)
             self.banner.grid(row=1, column=0, sticky="we", pady=(px(14), 0))
             self.banner.hide()
-            # Главное одной строкой: готово ли к игре
+            # Проверки по частям, как раньше, но в одну строку обычным шрифтом
             self.card = K.Card(outer)
             self.card.grid(row=2, column=0, sticky="we", pady=(px(14), 0))
-            self.card.body.columnconfigure(0, weight=1)
-            self.summary = K.StatusSummary(self.card.body, "Проверяю…")
-            self.summary.grid(row=0, column=0, sticky="we")
-            self.btn_languages = ttk.Button(self.card.body, text="Языки…", style="Secondary.TButton",
-                                            command=self.choose_languages)
-            self.btn_languages.grid(row=0, column=1, sticky="e", padx=(px(12), 0))
-            self.btn_languages.state(["disabled"])
+            self.checks = K.CheckList(self.card.body)
+            self.checks.pack(fill="x")
+            self.checks.add("game", "Игра", "Ищу…")
+            self.checks.add("hachimi", "Hachimi", "")
+            self.checks.add("pack", "Перевод", "")
+            if self.online:
+                self.checks.add("online", "Обновления", "Проверю при запуске")
+            self.checks.add("extra", "", "")
+            self.checks.show("extra", False)
             self.primary = K.primary_button(outer, "Проверяю…", self._on_primary)
             self.primary.grid(row=3, column=0, sticky="we", pady=(px(18), 0))
             self.primary.state(["disabled"])
-            # Место под полосу прогресса занято всегда: окно не меняет высоту, когда она появляется
-            slot = ttk.Frame(outer, height=px(18))
+            # Место под полосу прогресса и ход работы занято всегда: окно не меняет высоту, когда они появляются
+            slot = ttk.Frame(outer, height=px(46))
             slot.grid(row=4, column=0, sticky="we", pady=(px(10), 0))
             slot.grid_propagate(False)
             slot.columnconfigure(0, weight=1)
             slot.rowconfigure(0, weight=1)
             self.progress = ttk.Progressbar(slot, maximum=1000)
-            self.progress.grid(row=0, column=0, sticky="we")
+            self.progress.grid(row=0, column=0, sticky="swe")
             self.progress.grid_remove()
+            self.progress_text = ttk.Label(slot, text="", style="Body.TLabel")
+            self.progress_text.grid(row=1, column=0, sticky="w", pady=(px(4), 0))
             row = ttk.Frame(outer)
             row.grid(row=5, column=0, sticky="we", pady=(px(6), 0))
-            row.columnconfigure(2, weight=1)
+            row.columnconfigure(3, weight=1)
+            self.btn_languages = ttk.Button(row, text="Языки…", style="Secondary.TButton", command=self.choose_languages)
+            self.btn_languages.grid(row=0, column=0, sticky="w", padx=(0, px(8)))
+            self.btn_languages.state(["disabled"])
             # «Починить» и «Новый лаунчер» видны, только когда они нужны
             self.btn_repair = ttk.Button(row, text="Починить", style="Secondary.TButton", command=self.repair_all)
-            self.btn_repair.grid(row=0, column=0, sticky="w", padx=(0, px(8)))
+            self.btn_repair.grid(row=0, column=1, sticky="w", padx=(0, px(8)))
             self.btn_repair.grid_remove()
             self.btn_launcher = ttk.Button(row, text="Новый лаунчер…", style="Secondary.Accent.TButton", command=self._show_launcher_offer)
-            self.btn_launcher.grid(row=0, column=1, sticky="w")
+            self.btn_launcher.grid(row=0, column=2, sticky="w")
             self.btn_launcher.grid_remove()
             self.btn_more = ttk.Button(row, text="Дополнительно ▾", style="Secondary.TButton", command=self._more_menu)
-            self.btn_more.grid(row=0, column=3, sticky="e")
+            self.btn_more.grid(row=0, column=4, sticky="e")
             self.menu = tk.Menu(self, tearoff=False)
             if self.online:
                 self.menu.add_command(label="Проверить обновления", command=self.check_all_updates)
@@ -374,16 +391,16 @@ def build_window(args, pack):
                 self.progress.configure(mode="determinate")
                 self.progress["value"] = 0
                 self.progress.grid()
-                self.summary.set("busy", text or "Подождите…")
+                self.progress_text.configure(text=text)
             else:
                 self.progress.stop()
                 self.progress.grid_remove()
-                self.summary.set(*self.last_summary)
+                self.progress_text.configure(text="")
 
         def set_progress(self, frac, text):
             self.progress["value"] = int(frac * 1000)
             if text:
-                self.summary.set(title=text)
+                self.progress_text.configure(text=text)
 
         def _show_if_working(self):
             self.reveal_job = None
@@ -621,9 +638,8 @@ def build_window(args, pack):
             apply_requested, self.apply_requested = self.apply_requested, False
             if error is not None:
                 self.deiconify()
-                self.last_summary = ("fail", "Не удалось проверить игру")
-                self.summary.set(*self.last_summary)
-                self.banner.show("err", str(error))
+                self.checks.set("game", "fail", "Не удалось проверить")
+                self.banner.show("err", f"Не удалось проверить игру: {error}")
                 self.primary.configure(text="Проверить снова")
                 self.primary.state(["!disabled"])
                 return
@@ -660,34 +676,65 @@ def build_window(args, pack):
                 text = "Проверить снова"
             self.primary.configure(text=text)
             self.primary.state(["!disabled"] if not self.busy else ["disabled"])
-            self.last_summary = self._summary(rep)
-            if not self.busy:
-                self.summary.set(*self.last_summary)
+            self._render_checks(rep)
             if rep.mode == "repair" and self.pack_:
                 self.btn_repair.grid()
             else:
                 self.btn_repair.grid_remove()
-            if self.banner_note and not self.busy:
+            if rep.mode == "blocked":
+                self.banner.show("warn", rep.blocked)  # почему сейчас нельзя: игра запущена или Steam обновляет
+            elif self.banner_note and not self.busy:
                 self.banner.show(*self.banner_note)   # итог последнего действия («Готово…») остаётся, пока человек не нажмёт что-то ещё
             elif not self.busy:
-                self.banner.hide()                    # состояние игры показывает главный статус, плашка — только для итогов
+                self.banner.hide()
             self.after(50, self._fit_height)
 
-        def _summary(self, rep):
-            """(состояние, заголовок) главного статуса: заголовок сам говорит, что делать."""
-            mode = rep.mode
-            if not self.online and self.pack_ is None and mode != "no_game":
-                return "fail", "Нет файлов перевода рядом с лаунчером"
-            if mode == "update":
-                pack = rep.check("pack")
-                if pack and pack.detail.startswith("Нужно применить"):
-                    return "info", "Нужно применить языки"
-                return "info", "Есть новая версия перевода"
-            if mode == "blocked":
-                return "warn", "Steam обновляет игру" if "Steam" in rep.blocked else "Закройте игру"
-            return {"ok": ("ok", "Готово к игре"), "installed_only": ("ok", "Можно играть"),
-                    "repair": ("warn", "Нужна починка"), "not_installed": ("info", "Русификатор не установлен"),
-                    "need_channel": ("warn", "Нужен интернет"), "no_game": ("fail", "Игра не найдена")}.get(mode, ("off", ""))
+        def _render_checks(self, rep):
+            """Строки проверок: короткое состояние обычным шрифтом вместо пояснений мелким."""
+            c = {x.key: x for x in rep.checks}
+            if rep.game is not None:
+                self.checks.set("game", "ok", "Найдена" + (f" · сборка {rep.game.buildid}" if rep.game.buildid else ""))
+            else:
+                self.checks.set("game", "fail", "Не найдена")
+            hs = rep.hachimi
+            version = hachimi_version() or (self.pack_.manifest.get("hachimi", "") if self.pack_ else "")
+            hachimi = {"ok": "На месте" + (f" · версия {version}" if version else ""), "absent": "Не установлен",
+                       "stub_restored": "Слетел после обновления игры", "dll_missing": "Не хватает файла",
+                       "foreign": "Чужой cri_mana_vpx.dll", "unknown": "Файл игры не распознан"}.get(hs.kind if hs else "", "—")
+            chk = c.get("hachimi")
+            self.checks.set("hachimi", chk.state if chk else "off", hachimi)
+            chk = c.get("pack")      # как раньше: версия перевода, коротко, чтобы помещалось в одну строку
+            if chk is None:
+                self.checks.set("pack", "off", "—")
+            else:
+                detail = chk.detail
+                if not self.online and self.pack_ is None:
+                    detail = "Нет папки data рядом с лаунчером"
+                elif detail.startswith("Есть новая версия") and self.pack_:
+                    detail = f"Есть новая версия {self.pack_.version}"
+                elif detail.startswith("Файлы повреждены"):
+                    detail = "Повреждены файлы перевода"
+                elif detail.startswith("Ожидаю загрузки"):
+                    detail = "Ждёт загрузки из интернета"
+                self.checks.set("pack", chk.state, detail)
+            if self.online:
+                online = self.channel_result
+                if online is None:
+                    self.checks.set("online", "info", "Проверю, когда найду игру")
+                elif online.state in ("offline", "error"):
+                    self.checks.set("online", "warn", "Нет связи с сервером обновлений")
+                elif online.state == "updated":
+                    self.checks.set("online", "ok", f"Загружен выпуск {online.tag}")
+                else:
+                    self.checks.set("online", "ok", "Перевод актуален")
+            extra = next((c[k] for k in ("build", "config") if k in c and c[k].state != "ok"), None)
+            if extra is None:
+                self.checks.show("extra", False)
+            else:
+                value = ("Нужна проверка" if extra.key == "build" else
+                         "Будут созданы" if "создадим" in extra.detail else "Будут исправлены")
+                self.checks.set("extra", extra.state, value, extra.title)
+                self.checks.show("extra", True)
 
         def _fit_height(self):
             """Высота окна по содержимому: без пустого поля снизу и без обрезания."""

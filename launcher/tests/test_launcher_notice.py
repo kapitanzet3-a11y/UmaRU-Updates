@@ -22,5 +22,14 @@ class Snooze(unittest.TestCase):
             self.assertFalse(app.launcher_snoozed("1.5", now=1001))
 
 
+class HachimiVersion(unittest.TestCase):
+    def test_version_from_installer_provenance(self):
+        with tempfile.TemporaryDirectory(dir=here) as data, patch.dict(os.environ, {"UMA_RU_PACK": data}):
+            self.assertEqual(app.hachimi_version(), "")
+            Path(data, "hachimi_installer.txt").write_text(
+                "Установщик Hachimi Edge (v0.33.1), как он выложен автором.\n", encoding="utf-8")
+            self.assertEqual(app.hachimi_version(), "0.33.1")
+
+
 if __name__ == "__main__":
     unittest.main()

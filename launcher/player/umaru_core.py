@@ -823,7 +823,7 @@ def diagnose(ctx, deep=False, progress=None):
     ps = None
     retained = ctx.online and keep_installed_translation(state, pack)
     if retained:
-        checks.append(Check("pack", "info", "Перевод", f"Установлена версия {state['pack_version']}."))
+        checks.append(Check("pack", "info", "Перевод", f"Установлен · версия {state['pack_version']}"))
     elif pack is None:
         message = ("Ожидаю загрузки выпуска из канала обновлений." if ctx.online else
                    "Рядом с лаунчером нет папки data. Распакуйте архив целиком и запустите UmaRU.exe из этой папки.")
@@ -846,7 +846,7 @@ def diagnose(ctx, deep=False, progress=None):
             plan.append("pack")
         elif ps.stale or ps.obsolete:
             count = len(ps.stale) + len(ps.obsolete)
-            checks.append(Check("pack", "info", "Перевод", f"Нужно применить выбранные языки: изменится файлов — {count}"))
+            checks.append(Check("pack", "info", "Перевод", f"Нужно применить языки ({count} файлов)"))
             plan.append("pack")
         else:
             checks.append(Check("pack", "ok", "Перевод", f"Установлен · версия {pack.version}"))

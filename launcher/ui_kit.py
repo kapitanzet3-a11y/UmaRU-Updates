@@ -243,69 +243,50 @@ class StatusRow(ttk.Frame):
             self.title_label.configure(text=title)
 
 
-class StatusSummary(ttk.Frame):
-    """Главное состояние экрана одной строкой: крупный значок цветом состояния, заголовок и пояснение. Значок различается
-    и формой (галочка, «!», «i», крестик, многоточие), а не только цветом. Подробности по частям — в StatusRow."""
+class CheckList(ttk.Frame):
+    """Проверки по строкам: цветная точка, название и состояние обычным шрифтом в одну строку («● Hachimi  На месте»),
+    без пояснений мелким шрифтом. Строки в общей сетке, поэтому состояния выровнены по одной линии. У строки может быть
+    кнопка справа (например, «Языки…» у перевода)."""
 
-    GLYPHS = {"ok": "check", "warn": "bang", "fail": "cross", "err": "cross", "info": "info", "busy": "dots", "off": "dots"}
-
-    def __init__(self, parent, title="", detail="", state="busy"):
+    def __init__(self, parent):
         super().__init__(parent)
-        self.columnconfigure(1, weight=1)
-        self.size = px(40)
-        self.icon = tk.Canvas(self, width=self.size, height=self.size, highlightthickness=0, bg=THEME.bg)
-        self.icon.grid(row=0, column=0, rowspan=2, padx=(0, px(14)))
-        self.title_label = ttk.Label(self, text=title, style="Title.TLabel")
-        self.title_label.grid(row=0, column=1, sticky="w")
-        self.detail_label = HintLabel(self, "")
-        self.detail_label.grid(row=1, column=1, sticky="we")
-        self.status = state  # не state: так называется метод ttk-виджета
-        self.set(state, detail=detail)
+        self.columnconfigure(2, weight=1)
+        self.rows = {}
 
-    def set(self, state=None, title=None, detail=None):
+    def add(self, key, title, value="", state="off", action=None):
+        row = len(self.rows)
+        size = px(14)
+        dot = tk.Canvas(self, width=size, height=size, highlightthickness=0, bg=THEME.bg)
+        dot.create_oval(px(2), px(2), size - px(2), size - px(2), fill=THEME.color(state), outline="", tags="dot")
+        dot.grid(row=row, column=0, padx=(0, px(10)), pady=px(6))
+        title_label = ttk.Label(self, text=title, style="Heading.TLabel")
+        title_label.grid(row=row, column=1, sticky="w", padx=(0, px(18)))
+        value_label = HintLabel(self, value, style="Body.TLabel", wrap=300)   # длинное значение переносится
+        value_label.grid(row=row, column=2, sticky="we")
+        widgets = [dot, title_label, value_label]
+        if action:
+            button = ttk.Button(self, text=action[0], command=action[1], style="Secondary.TButton")
+            button.grid(row=row, column=3, sticky="e", padx=(px(12), 0))
+            widgets.append(button)
+        self.rows[key] = widgets
+        return widgets
+
+    def set(self, key, state=None, value=None, title=None):
+        dot, title_label, value_label = self.rows[key][:3]
         if state is not None:
-            self.status = state
-            self._draw()
+            dot.itemconfigure("dot", fill=THEME.color(state))
+        if value is not None:
+            value_label.configure(text=value)
         if title is not None:
-            self.title_label.configure(text=title)
-        if detail is not None:
-            self.detail_label.configure(text=detail)
-            if detail:
-                self.detail_label.grid()
-                self.title_label.grid_configure(rowspan=1, sticky="sw")
-            else:
-                self.detail_label.grid_remove()     # без пояснения заголовок стоит по центру значка
-                self.title_label.grid_configure(rowspan=2, sticky="w")
+            title_label.configure(text=title)
 
-    def _draw(self):
-        c, s = self.icon, self.size
-        c.delete("all")
-        c.create_oval(1, 1, s - 1, s - 1, fill=THEME.color(self.status), outline="")
-        ink, w = THEME.bg, max(2, px(4))   # знак цветом фона: читается и в светлой, и в тёмной теме
+    def show(self, key, visible=True):
+        for widget in self.rows[key]:
+            widget.grid() if visible else widget.grid_remove()
 
-        def at(x, y):
-            return x * s, y * s
-
-        def dot(x, y, r):
-            cx, cy = at(x, y)
-            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=ink, outline="")
-
-        glyph = self.GLYPHS.get(self.status, "dots")
-        if glyph == "check":
-            c.create_line(*at(.28, .52), *at(.44, .67), *at(.72, .36), fill=ink, width=w, capstyle="round",
-                          joinstyle="round")
-        elif glyph == "cross":
-            for a, b in (((.33, .33), (.67, .67)), ((.67, .33), (.33, .67))):
-                c.create_line(*at(*a), *at(*b), fill=ink, width=w, capstyle="round")
-        elif glyph == "bang":
-            c.create_line(*at(.5, .25), *at(.5, .56), fill=ink, width=w, capstyle="round")
-            dot(.5, .73, w * .7)
-        elif glyph == "info":
-            dot(.5, .28, w * .7)
-            c.create_line(*at(.5, .45), *at(.5, .74), fill=ink, width=w, capstyle="round")
-        else:
-            for x in (.3, .5, .7):
-                dot(x, .5, w * .6)
+    def button(self, key):
+        widgets = self.rows[key]
+        return widgets[3] if len(widgets) > 3 else None
 
 
 class Banner(tk.Frame):
