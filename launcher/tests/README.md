@@ -7,7 +7,8 @@ python -B -m unittest discover -s launcher/tests -p 'test_*.py' -v
 ```
 
 The suites cover launcher manifest signatures and verified setup downloads,
-explicit update consent in the Tk window, local HTTP update transport and cache
+explicit update consent in the Tk window (a version check at startup, the new
+launcher offer before the game starts, «Позже» quiet for three days), local HTTP update transport and cache
 fallbacks and pruning of old cached packs, offline publication with mocked
 GitHub calls, safe game writes, and uninstall hand-off to the Inno uninstaller
 with cleanup of old launcher downloads, and per-part language choice (install
@@ -23,6 +24,7 @@ The larger checks are opt-in scripts under `integration/`:
 
 ```powershell
 python -B launcher/tests/integration/consent_ui.py
+python -B launcher/tests/integration/launcher_notice_ui.py
 python -B launcher/tests/integration/acceptance.py --old-archive OLD.zip --exe UmaRU.exe --channel-dir CHANNEL --scratch SCRATCH --require-delta
 python -B launcher/tests/integration/verify_live.py --manifest launcher.json --channel channel.json --scratch SCRATCH
 ```

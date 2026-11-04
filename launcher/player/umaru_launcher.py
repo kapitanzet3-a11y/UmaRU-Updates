@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Manual-only, signed update discovery and verified installer download.
+"""Signed launcher update discovery and verified installer download.
 
-The manifest cannot choose a URL or a local path. A verified version selects
-one immutable GitHub release asset; this module never starts the installer.
+The window checks for a new version on every start and offers it; only the
+player's click downloads and starts the installer. The manifest cannot choose
+a URL or a local path. A verified version selects one immutable GitHub release
+asset; this module never starts the installer.
 """
 from __future__ import annotations
 

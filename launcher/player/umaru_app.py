@@ -42,6 +42,8 @@ INSTANCE_MUTEX = "UmaRUPlayerSingleInstance"     # это же имя прове
 SHOW_EVENT = "UmaRUPlayerShowWindow"             # вторая копия просит открытое окно показаться
 PLAY_EVENT = "UmaRUPlayerPlay"                   # ... показаться и запустить игру (ярлык с --play)
 LAUNCHER_DOWNLOADS = Path(tempfile.gettempdir()) / "UmaRU-launcher"
+LAUNCHER_SNOOZE = 3 * 24 * 3600                  # «Позже» в предложении нового лаунчера: не спрашивать три дня
+LAUNCHER_WAIT = 4.0                              # перед запуском игры ждём фоновую проверку версии не дольше, с
 _ADMIN_HINT = ("\nЗапустите UmaRU.exe от имени администратора (правый щелчок по нему → «Запуск от имени администратора») "
                "и повторите удаление.")
 log = logging.getLogger("umaru")
@@ -123,6 +125,19 @@ def check_channel(data_dir, game, *, download=True, progress=None, extras=()):
     if download:
         return updates.resolve(data_dir, channel, game_dir=game.path if game else None, progress=progress, extras=extras)
     return updates.Result(updates.cached_pack(data_dir, channel), "local", "", extras=cached_extras(data_dir, extras))
+
+
+def launcher_snoozed(version, now=None):
+    """Игрок нажал «Позже» для этой версии лаунчера меньше трёх дней назад."""
+    later = core.load_settings().get("launcher_later")
+    now = time.time() if now is None else now
+    return (isinstance(later, dict) and later.get("version") == version
+            and isinstance(later.get("until"), (int, float)) and now < later["until"])
+
+
+def snooze_launcher(version, now=None):
+    now = time.time() if now is None else now
+    core.save_settings({"launcher_later": {"version": version, "until": now + LAUNCHER_SNOOZE}})
 
 
 def choices_summary(choices):
@@ -226,6 +241,12 @@ def build_window(args, pack):
             self.extras = {}               # дополнительные пакеты (английские комиксы)
             self.offers = None             # что канал предлагает докачать; None — канал ещё не проверяли
             self.apply_requested = False   # игрок сменил языки: применить после проверки
+            self.launcher_offer = None     # новая версия лаунчера, найденная проверкой при запуске
+            self.launcher_checked = False  # фоновая проверка версии лаунчера закончилась
+            self.launcher_started = time.monotonic()
+            self.launcher_prompted = False # предложение уже показывали в этот запуск
+            self.launcher_waiting = False  # запуск игры ждёт окончания проверки версии
+            self.launching = False
             self.pack_ = core.compose_pack(pack, core.load_choices())
             self.online = (pack_root() / "update-channel.json").is_file()
             self.channel_checked = False
@@ -237,11 +258,15 @@ def build_window(args, pack):
             self._build()
             K.dark_title_bar(self, K.THEME.dark)
             self.protocol("WM_DELETE_WINDOW", self._on_close)
-            self.after(60, self._poll)
+            self._poll_job = self.after(60, self._poll)
             hidden = args.play and not args.shot
             if not hidden:
                 self.deiconify()
             self.after(120, self.refresh)
+            if self.online and not args.shot:
+                self._check_launcher_quietly()
+            else:
+                self.launcher_checked = True
             if args.shot and args.shot_after:   # снимок в заданный момент (например, посреди установки), а не после неё
                 self._shot_scheduled = True
                 self.after(int(args.shot_after * 1000), self._grab_and_quit)
@@ -283,9 +308,9 @@ def build_window(args, pack):
                     button.pack(side="left", padx=(0, px(8)))
                     button.state(["disabled"])
                     self.update_buttons.append(button)
+                self.btn_launcher = self.update_buttons[-1]
             self.row_pack.button.configure(style="Secondary.TButton")
             self.row_pack.button.state(["disabled"])
-            self.update_buttons.append(self.row_pack.button)   # недоступна, пока окно занято, как и кнопки обновлений
             self.primary = K.primary_button(outer, "Проверяю…", self._on_primary)
             self.primary.grid(row=3, column=0, sticky="we", pady=(px(18), 0))
             self.primary.state(["disabled"])
@@ -333,7 +358,7 @@ def build_window(args, pack):
             self.q.put((fn, a))
 
         def _poll(self):
-            self.after(80, self._poll)
+            self._poll_job = self.after(80, self._poll)
             show, play = take_instance_requests()
             if show:
                 self._on_second_launch(play)
@@ -365,7 +390,7 @@ def build_window(args, pack):
                 self.reveal_job = None
             self.busy = busy
             state = ["disabled"] if busy else ["!disabled"]
-            for w in (self.primary, self.btn_repair, self.btn_more, *self.update_buttons):
+            for w in (self.primary, self.btn_repair, self.btn_more, self.row_pack.button, *self.update_buttons):
                 w.state(state)
             if busy:
                 self.progress.grid()
@@ -390,8 +415,19 @@ def build_window(args, pack):
             self.deiconify()
             self.lift()
             self.attributes("-topmost", True)    # Windows не всегда даёт фокус чужому окну: поднимаем ненадолго поверх всех
-            self.after(300, lambda: self.attributes("-topmost", False))
+            self._topmost_job = self.after(300, self._drop_topmost)
             self.focus_force()
+
+        def _drop_topmost(self):
+            self._topmost_job = None
+            self.attributes("-topmost", False)
+
+        def destroy(self):
+            for name in ("_topmost_job", "_poll_job"):    # отложенные вызовы закрытого окна иначе падают в Tcl
+                if getattr(self, name, None):
+                    self.after_cancel(getattr(self, name))
+                    setattr(self, name, None)
+            super().destroy()
 
         def _on_second_launch(self, play):
             """Программу запустили ещё раз (ярлык, меню «Пуск»), пока это окно открыто: показываемся, а для ярлыка
@@ -445,10 +481,65 @@ def build_window(args, pack):
                 elif offer is None:
                     self.launcher_notice("ok", f"У вас актуальная версия лаунчера {APP_VERSION}.")
                 else:
+                    self._set_launcher_offer(offer)
+                    self.launcher_prompted = True
                     self.offer_launcher(offer)
             self.run_bg(lambda: launcher.check(APP_VERSION), checked)
 
-        def offer_launcher(self, offer):
+        def _check_launcher_quietly(self):
+            """Как в других лаунчерах: при каждом запуске в фоне смотрим, не вышла ли новая версия. Окно не занято,
+            ошибки сети только в журнал. Ставится новая версия, как и раньше, только по кнопке игрока."""
+            self.launcher_started = time.monotonic()
+
+            def work():
+                try:
+                    return launcher.check(APP_VERSION)
+                except launcher.LauncherUpdateError as exc:
+                    log.info("Проверка версии лаунчера: %s", exc)
+                    return None
+
+            def done(offer, _error):
+                self.launcher_checked = True
+                if offer is None:
+                    return
+                log.info("Вышел лаунчер %s", offer.version)
+                self._set_launcher_offer(offer)
+                if not args.play and self.auto_done and not self.busy:
+                    self._prompt_launcher()
+            self.run_bg(work, done)
+
+        def _set_launcher_offer(self, offer):
+            self.launcher_offer = offer
+            if getattr(self, "btn_launcher", None) is not None:
+                self.btn_launcher.configure(text=f"Новый лаунчер {offer.version}…", style="Accent.TButton")
+
+        def _prompt_launcher(self, then_play=False):
+            """Показать предложение нового лаунчера, если оно есть и игрок не откладывал его. True — показали."""
+            offer = self.launcher_offer
+            if offer is None or self.launcher_prompted or launcher_snoozed(offer.version):
+                return False
+            self.launcher_prompted = True
+            self._bring_to_front()           # по ярлыку «Играть» окно скрыто, а предложение должно быть видно
+            self.offer_launcher(offer, later=(lambda: self._launch(force=True)) if then_play else None)
+            return True
+
+        def _launcher_gate(self):
+            """Перед запуском игры: если вышел новый лаунчер, сначала предложить его. True — запуск отложен."""
+            if self.launcher_waiting:
+                return True
+            if not self.launcher_checked and time.monotonic() - self.launcher_started < LAUNCHER_WAIT:
+                self.launcher_waiting = True
+
+                def again():
+                    self.launcher_waiting = False
+                    self._launch()
+                self.after(150, again)
+                return True
+            return self._prompt_launcher(then_play=True)
+
+        def offer_launcher(self, offer, later=None):
+            """Предложение нового лаунчера. «Позже» не спрашивает про эту версию три дня; later — что делать после
+            «Позже» (например, всё-таки запустить игру)."""
             dialog = tk.Toplevel(self)
             dialog.withdraw()
             dialog.transient(self)
@@ -467,20 +558,26 @@ def build_window(args, pack):
                 notes.pack(fill="both", expand=True, pady=K.px(10))
             buttons = ttk.Frame(body)
             buttons.pack(fill="x", pady=(K.px(8), 0))
-            later = ttk.Button(buttons, text="Позже", command=dialog.destroy)
-            later.pack(side="left")
+            def postpone():
+                snooze_launcher(offer.version)
+                dialog.destroy()
+                if later:
+                    later()
+            later_button = ttk.Button(buttons, text="Позже", command=postpone)
+            later_button.pack(side="left")
             def accept():
                 dialog.destroy()
                 self.download_launcher(offer)
-            ttk.Button(buttons, text="Скачать и установить", command=accept).pack(side="right")
-            dialog.bind("<Escape>", lambda _event: dialog.destroy())
+            ttk.Button(buttons, text="Скачать и установить", style="Accent.TButton", command=accept).pack(side="right")
+            dialog.bind("<Escape>", lambda _event: postpone())
+            dialog.protocol("WM_DELETE_WINDOW", postpone)
             dialog.update_idletasks()
             x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_reqwidth()) // 2
             y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_reqheight()) // 2
             dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
             dialog.deiconify()
             dialog.grab_set()
-            later.focus_set()
+            later_button.focus_set()
 
         def download_launcher(self, offer):
             if self.busy:
@@ -569,6 +666,8 @@ def build_window(args, pack):
             elif args.shot and not self.busy and not getattr(self, "_shot_scheduled", False):
                 self._shot_scheduled = True   # после автоматической починки — снимок уже готового состояния
                 self.after(1500, self._grab_and_quit)
+            if not args.play and not self.busy and not self.launching:
+                self._prompt_launcher()
 
         def render(self):
             rep = self.report
@@ -824,10 +923,14 @@ def build_window(args, pack):
                 return
             self.apply(["hachimi", "pack", "config", "caches"], deep=True, ok_text="Всё проверено и починено.")
 
-        def _launch(self):
+        def _launch(self, force=False):
+            if self.launching or (not force and self._launcher_gate()):
+                return
+            self.launching = True
             try:
                 core.launch_game()
             except OSError as e:
+                self.launching = False
                 self.banner.show("err", f"Не удалось запустить игру через Steam: {e}")
                 return
             log.info("Игра запущена через Steam")
