@@ -106,13 +106,29 @@ def pretty_date(version):
         return version or "—"
 
 
-def check_channel(data_dir, game, *, download=True, progress=None):
+def wanted_extras(choices):
+    """Дополнительные пакеты, которые нужны для выбора игрока: английские комиксы качаем, только если их выбрали."""
+    return ("comics_en",) if choices.get("comics") == "en" else ()
+
+
+def cached_extras(data_dir, names):
+    channel = updates.read_channel(data_dir)
+    return {name: updates.cached_extra(data_dir, channel, name) if channel else None for name in names}
+
+
+def check_channel(data_dir, game, *, download=True, progress=None, extras=()):
     channel = updates.read_channel(data_dir)
     if channel is None:
         return updates.Result(core.load_pack(data_dir), "error", "Не удалось прочитать адрес обновлений. Переустановите мастер.")
     if download:
-        return updates.resolve(data_dir, channel, game_dir=game.path if game else None, progress=progress)
-    return updates.Result(updates.cached_pack(data_dir, channel), "local", "")
+        return updates.resolve(data_dir, channel, game_dir=game.path if game else None, progress=progress, extras=extras)
+    return updates.Result(updates.cached_pack(data_dir, channel), "local", "", extras=cached_extras(data_dir, extras))
+
+
+def choices_summary(choices):
+    """«комиксы — английский, ролик сюжета — японский»; пусто, если всё на русском."""
+    return ", ".join(f"{core.CONTENT_PARTS[part][0].lower()} — {core.LANGUAGE_NAMES[lang].lower()}"
+                     for part, lang in choices.items() if lang != "ru")
 
 
 # ---------------------------------------------------------------- командная строка (без окна)
@@ -124,14 +140,19 @@ def run_cli(args, pack):
     result = {"app": APP_VERSION}
     code = 0
     removal = None
+    choices = core.load_choices()
+    extras = cached_extras(data_dir, wanted_extras(choices)) if online else {}
     try:
         if online:
-            check = check_channel(data_dir, game, download=args.update_cache or bool(game and (args.install or args.repair)))
-            pack = check.pack
+            check = check_channel(data_dir, game, download=args.update_cache or bool(game and (args.install or args.repair)),
+                                  extras=wanted_extras(choices))
+            pack, extras = check.pack, check.extras
             result.update(update_state=check.state, update_message=check.message, release=check.tag)
         if args.update_cache and not online:
             raise core.UmaError("Для этого мастера не задан канал обновлений.")
         result['pack'] = pack.version if pack else None
+        result['content'] = choices
+        pack = core.compose_pack(pack, choices, comics_en=extras.get("comics_en"))
         ctx = core.Context(game, pack, online=online, installer=hachimi_installer())
         if args.update_cache:
             if result.get('update_state') not in ('updated', 'current'):
@@ -201,7 +222,11 @@ def build_window(args, pack):
             self.auto_done = False
             self.log_visible = False
             self.banner_note = None
-            self.pack_ = pack
+            self.raw_pack = pack           # пакет как скачан; self.pack_ — он же по выбору языков (compose_pack)
+            self.extras = {}               # дополнительные пакеты (английские комиксы)
+            self.offers = None             # что канал предлагает докачать; None — канал ещё не проверяли
+            self.apply_requested = False   # игрок сменил языки: применить после проверки
+            self.pack_ = core.compose_pack(pack, core.load_choices())
             self.online = (pack_root() / "update-channel.json").is_file()
             self.channel_checked = False
             self.channel_result = None
@@ -239,7 +264,7 @@ def build_window(args, pack):
             self.card.grid(row=2, column=0, sticky="we", pady=(px(14), 0))
             self.row_game = K.StatusRow(self.card.body, "Игра", "Проверяю…")
             self.row_hachimi = K.StatusRow(self.card.body, "Hachimi", "")
-            self.row_pack = K.StatusRow(self.card.body, "Перевод", "")
+            self.row_pack = K.StatusRow(self.card.body, "Перевод", "", action=("Языки…", self.choose_languages))
             self.row_extra = K.StatusRow(self.card.body, "", "")
             for row in (self.row_game, self.row_hachimi, self.row_pack):
                 row.pack(fill="x", pady=(0, px(10)))
@@ -258,6 +283,9 @@ def build_window(args, pack):
                     button.pack(side="left", padx=(0, px(8)))
                     button.state(["disabled"])
                     self.update_buttons.append(button)
+            self.row_pack.button.configure(style="Secondary.TButton")
+            self.row_pack.button.state(["disabled"])
+            self.update_buttons.append(self.row_pack.button)   # недоступна, пока окно занято, как и кнопки обновлений
             self.primary = K.primary_button(outer, "Проверяю…", self._on_primary)
             self.primary.grid(row=3, column=0, sticky="we", pady=(px(18), 0))
             self.primary.state(["disabled"])
@@ -289,7 +317,8 @@ def build_window(args, pack):
             if self.online:
                 self.menu.add_command(label="Проверить обновления", command=self.check_updates)
                 self.menu.add_separator()
-            for label, cmd in (("Выбрать папку игры…", self.pick_game), ("Открыть папку игры", self.open_game_dir),
+            for label, cmd in (("Языки перевода…", self.choose_languages),
+                               ("Выбрать папку игры…", self.pick_game), ("Открыть папку игры", self.open_game_dir),
                                ("Создать ярлык на рабочем столе", self.make_shortcut), ("Открыть журнал", self.open_log),
                                ("Скопировать отчёт для того, кто помогает", self.copy_report)):
                 self.menu.add_command(label=label, command=cmd)
@@ -490,30 +519,39 @@ def build_window(args, pack):
 
             def work():
                 game = core.find_game(override)
-                pack = self.pack_
-                result = None
+                raw, extras, result = self.raw_pack, dict(self.extras), None
+                choices = core.load_choices()
+                wanted = wanted_extras(choices)
                 if fetch and game:
                     self.ui(self.set_progress, 0, "Проверяем доступные обновления…")
-                    result = check_channel(pack_root(), game, progress=lambda f, s: self.ui(self.set_progress, f, s))
-                    pack = result.pack
+                    result = check_channel(pack_root(), game, progress=lambda f, s: self.ui(self.set_progress, f, s),
+                                           extras=wanted)
+                    raw, extras = result.pack, dict(result.extras)
                     core.fill_manifest(game)
+                elif self.online:
+                    for name, cached in cached_extras(pack_root(), [n for n in wanted if not extras.get(n)]).items():
+                        extras[name] = cached
+                pack = core.compose_pack(raw, choices, comics_en=extras.get("comics_en"))
                 rep = core.diagnose(core.Context(game, pack, online=self.online))
-                return game, rep, pack, result
+                return game, rep, pack, result, raw, extras
             self.run_bg(work, self._after_refresh)
 
         def _after_refresh(self, result, error):
             self.set_busy(False)
             play_requested, self.play_requested = self.play_requested, False   # просьба действует на одну проверку
+            apply_requested, self.apply_requested = self.apply_requested, False
             if error is not None:
                 self.deiconify()
                 self.banner.show("err", f"Не удалось проверить игру: {error}")
                 self.primary.configure(text="Проверить снова")
                 self.primary.state(["!disabled"])
                 return
-            self.game, self.report, self.pack_, checked = result
+            self.game, self.report, self.pack_, checked, self.raw_pack, self.extras = result
             if checked:
                 self.channel_checked = True
                 self.channel_result = checked
+                if checked.offers is not None:
+                    self.offers = dict(checked.offers)
                 release = f" · {checked.tag}" if checked.tag and checked.state in ('current', 'updated') else ""
                 variant = updates.read_channel(pack_root())
                 edition = 'Облегчённый перевод' if variant and variant.variant == 'lite' else 'Полный перевод'
@@ -526,6 +564,8 @@ def build_window(args, pack):
                 self._auto()
             elif play_requested:
                 self._play_after_request()
+            elif apply_requested and self.report.mode in ("update", "repair"):
+                self.apply(self.report.plan, ok_text="Языки перевода применены.")
             elif args.shot and not self.busy and not getattr(self, "_shot_scheduled", False):
                 self._shot_scheduled = True   # после автоматической починки — снимок уже готового состояния
                 self.after(1500, self._grab_and_quit)
@@ -533,12 +573,18 @@ def build_window(args, pack):
         def render(self):
             rep = self.report
             c = {x.key: x for x in rep.checks}
+            choices = core.load_choices()
+            summary = choices_summary(choices)
             for row, key in ((self.row_game, "game"), (self.row_hachimi, "hachimi"), (self.row_pack, "pack")):
                 chk = c.get(key)
                 if chk:
                     detail = chk.detail
                     if key == "game" and rep.game is not None:
                         detail = short_path(rep.game.path) + (f" · сборка {rep.game.buildid}" if rep.game.buildid else "")
+                    if key == "pack" and summary:
+                        detail += f"\nНе по-русски: {summary}."
+                        if choices["comics"] == "en" and not self.extras.get("comics_en"):
+                            detail += " Английских комиксов пока нет — оставлены комиксы из пакета."
                     row.set(chk.state, detail, chk.title)
                 else:
                     row.set("off", "—")
@@ -670,6 +716,105 @@ def build_window(args, pack):
                 else:
                     self.refresh()
             self.run_bg(work, done)
+
+        def _language_hint(self, part, lang):
+            """Пояснение под выбором языка: что именно получит игрок."""
+            raw = self.raw_pack
+            entries = raw.entries if raw else {}
+            channel = updates.read_channel(pack_root()) if self.online else None
+            lite = channel is not None and channel.variant == "lite"
+            if part == "texts":
+                return {"ru": "Сюжет, меню, навыки, реплики и песни на русском.",
+                        "ja": "Японский текст игры. Картинки и комиксы — как выбрано ниже."}[lang]
+            if part == "images":
+                return {"ru": "Названия скачек, имена в гаче, баннеры и кнопки на русском.",
+                        "ja": "Оригинальные японские картинки."}[lang]
+            if part == "movie":
+                if lang == "ja":
+                    return "Оригинальный японский ролик."
+                if raw and not any(core.content_part(r) == "movie" for r in entries):
+                    return "В облегчённом варианте перевода ролика нет: он останется японским."
+                return "Ролик с русскими субтитрами."
+            if lang == "ru":
+                return ("Русские страницы; где перевода нет — японские." if lite else
+                        "Русские страницы; где перевода нет — английские.")
+            if lang == "ja":
+                return "Оригинальные японские комиксы."
+            if self.extras.get("comics_en"):
+                return "Английские страницы для всех комиксов (уже скачаны)."
+            if not self.online:
+                return "Английские комиксы докачиваются только в программе с онлайн-обновлениями."
+            if self.offers is not None and "comics_en" not in self.offers:
+                return "Английские комиксы появятся с одним из следующих выпусков перевода."
+            size = (self.offers or {}).get("comics_en")
+            return "Английские страницы для всех комиксов. Скачаются отдельно" + (
+                f", около {max(1, round(size / 2**20))} МБ." if size else ".")
+
+        def choose_languages(self):
+            """Окно «Языки перевода»: для каждого раздела — русский, японский оригинал (и английский для комиксов)."""
+            if self.busy:
+                return
+            current = core.load_choices()
+            dialog = tk.Toplevel(self)
+            dialog.withdraw()
+            dialog.transient(self)
+            dialog.title("Языки перевода")
+            body = ttk.Frame(dialog, padding=K.px(18))
+            body.pack(fill="both", expand=True)
+            body.columnconfigure(0, weight=1)
+            ttk.Label(body, text="Языки перевода", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+            K.HintLabel(body, "Японский — оригинал игры: файлы этого раздела не ставятся, а уже поставленные "
+                              "убираются. Выбор применится сразу после сохранения.", wrap=460).grid(
+                row=1, column=0, sticky="we", pady=(K.px(2), K.px(12)))
+            variables, hints = {}, {}
+
+            def update_hints():
+                for name, label in hints.items():
+                    label.configure(text=self._language_hint(name, variables[name].get()))
+
+            for row, (part, (title, languages)) in enumerate(core.CONTENT_PARTS.items(), start=2):
+                frame = ttk.Frame(body)
+                frame.grid(row=row, column=0, sticky="we", pady=(0, K.px(12)))
+                frame.columnconfigure(0, weight=1)
+                ttk.Label(frame, text=title, style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+                variables[part] = tk.StringVar(master=dialog, value=current[part])
+                radios = ttk.Frame(frame)
+                radios.grid(row=1, column=0, sticky="w", pady=(K.px(2), 0))
+                for lang in languages:
+                    ttk.Radiobutton(radios, text=core.LANGUAGE_NAMES[lang], value=lang, variable=variables[part],
+                                    command=update_hints).pack(side="left", padx=(0, K.px(16)))
+                hints[part] = K.HintLabel(frame, "", wrap=460)
+                hints[part].grid(row=2, column=0, sticky="we")
+            update_hints()
+            buttons = ttk.Frame(body)
+            buttons.grid(row=len(core.CONTENT_PARTS) + 2, column=0, sticky="we", pady=(K.px(6), 0))
+            ttk.Button(buttons, text="Отмена", style="Secondary.TButton", command=dialog.destroy).pack(side="left")
+
+            def save():
+                choices = {part: var.get() for part, var in variables.items()}
+                dialog.destroy()
+                self._apply_choices(choices)
+            ttk.Button(buttons, text="Сохранить и применить", style="Accent.TButton", command=save).pack(side="right")
+            dialog.bind("<Escape>", lambda _event: dialog.destroy())
+            dialog.update_idletasks()
+            x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_reqwidth()) // 2
+            y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_reqheight()) // 2
+            dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+            dialog.deiconify()
+            dialog.grab_set()
+
+        def _apply_choices(self, choices):
+            before = core.load_choices()
+            core.save_choices(choices)
+            choices = core.load_choices()
+            if choices == before:
+                return
+            log.info("Языки перевода: %s", choices_summary(choices) or "всё на русском")
+            self.banner_note = None
+            self.apply_requested = True
+            if self.online and choices["comics"] == "en" and not self.extras.get("comics_en"):
+                self.channel_checked = False      # английские комиксы надо скачать: проверим канал заново
+            self.refresh()
 
         def repair_all(self):
             if self.busy or self.game is None:

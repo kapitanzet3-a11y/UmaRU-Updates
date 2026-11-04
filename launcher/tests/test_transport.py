@@ -143,6 +143,47 @@ class TransportTests(unittest.TestCase):
         self.publish("2026.11.03-1202", {c: b"video"}, delta=("2026.11.03-1201", new))
         self.assertEqual(set(updates.resolve(self.data, self.channel).pack.entries), {c})
 
+    COMIC = "localized_data_ru/assets/textures/outgame/comic/tex_comic_1001_01.diff.png"
+
+    def offer_english(self, version, files):
+        m = manifest(version, files)
+        mb, zb = json.dumps(m).encode(), zip_bytes(files)
+        self.server.files["/comics-en.json"] = mb
+        self.server.files["/comics-en.zip"] = zb
+        channel = json.loads(self.server.files["/channel.json"])
+        channel["variants"]["full"]["extras"] = {"comics_en": {"manifest": self.asset("/comics-en.json", mb),
+                                                               "pack": self.asset("/comics-en.zip", zb)}}
+        self.server.files["/channel.json"] = json.dumps(channel).encode()
+
+    def test_english_comics_only_on_request_and_reused(self):
+        self.publish("2026.11.03-1200", {self.COMIC: b"ru", "localized_data_ru/a.json": b"a"})
+        self.offer_english("2026.11.03-1200", {self.COMIC: b"en"})
+        plain = updates.resolve(self.data, self.channel)
+        self.assertEqual(plain.offers, {"comics_en": len(self.server.files["/comics-en.zip"])})
+        self.assertEqual(plain.extras, {})
+        self.assertNotIn("/comics-en.zip", self.server.hits)
+        first = updates.resolve(self.data, self.channel, extras=("comics_en",))
+        self.assertEqual(first.extras["comics_en"].entries, {self.COMIC: [2, digest(b"en")]})
+        self.assertIn("/comics-en.zip", self.server.hits)
+        self.publish("2026.11.03-1201", {self.COMIC: b"ru", "localized_data_ru/a.json": b"b"})
+        self.offer_english("2026.11.03-1201", {self.COMIC: b"en"})
+        self.server.hits.clear()
+        second = updates.resolve(self.data, self.channel, extras=("comics_en",))
+        self.assertEqual(second.state, "updated")
+        self.assertEqual(second.extras["comics_en"].version, "2026.11.03-1201")
+        self.assertNotIn("/comics-en.zip", self.server.hits)      # те же страницы: берём из кэша
+        self.server.shutdown()
+        offline = updates.resolve(self.data, self.channel, extras=("comics_en",))
+        self.assertEqual(offline.state, "offline")
+        self.assertEqual(offline.extras["comics_en"].version, "2026.11.03-1201")
+
+    def test_foreign_files_in_english_comics_are_rejected(self):
+        self.publish("2026.11.03-1200", {self.COMIC: b"ru"})
+        self.offer_english("2026.11.03-1200", {"localized_data_ru/text_data_dict.json": b"{}"})
+        result = updates.resolve(self.data, self.channel, extras=("comics_en",))
+        self.assertEqual(result.state, "updated")
+        self.assertIsNone(result.extras["comics_en"])
+
     def cached_ids(self):
         root = updates._cache_root(self.channel)
         return sorted(p.name for p in root.iterdir() if p.is_dir() and len(p.name) == 64)

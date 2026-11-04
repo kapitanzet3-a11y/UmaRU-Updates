@@ -30,6 +30,8 @@ SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 TAG_RE = re.compile(r"r[0-9]+(?:\.[0-9]+)*\Z")
 LAUNCHER_TAG_RE = re.compile(r"launcher-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+COMIC_DIR = "localized_data_ru/assets/textures/outgame/comic/"
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PRIVATE_RE = re.compile(rb"sk-ant-[A-Za-z0-9_-]{8,}|(?:ghp_|github_pat_)[A-Za-z0-9_]{10,}|[A-Za-z]:\\\\Users\\\\|[A-Za-z]:/Users/")
 CHUNK = 1024 * 1024
 
@@ -177,6 +179,61 @@ def validate_family(full: dict, lite: dict, label: str) -> None:
             fail(f"{label}: full/lite member mismatch: {key}")
 
 
+def is_comic(name: str) -> bool:
+    return name.startswith(COMIC_DIR) and name[len(COMIC_DIR):].startswith("tex_comic") and "/" not in name[len(COMIC_DIR):]
+
+
+def english_comics(full: dict, full_pack: bytes, lite: dict, en_dir: Path) -> dict[str, tuple[dict, bytes]]:
+    """Optional English comics for each variant -> {variant: (manifest, pack.zip bytes)}.
+
+    The lite pack carries only Russian comic pages, so its comics are the pages
+    that have a Russian translation. The other comics of the full pack are the
+    English UmaTL pages. en_dir supplies English UmaTL pages for the Russian
+    ones under the same file names (tex_comic_*.diff.png). Full gets those
+    pages; lite gets every English page, since it ships none.
+    """
+    ru_pages = sorted(n for n in lite["entries"] if is_comic(n))
+    en_pages = sorted(n for n in full["entries"] if is_comic(n) and n not in lite["entries"])
+    if not ru_pages:
+        fail("English comics: the lite pack has no Russian comic pages")
+    supplied: dict[str, Path] = {}
+    for path in sorted(Path(en_dir).rglob("*")):
+        if path.is_file() and path.name.lower().endswith(".png"):
+            if path.name in supplied:
+                fail(f"English comics: duplicate file name {path.name}")
+            supplied[path.name] = path
+    pages, missing = {}, []
+    for name in ru_pages:
+        source = supplied.get(name.rsplit("/", 1)[-1])
+        if source is None:
+            missing.append(name.rsplit("/", 1)[-1])
+            continue
+        data = source.read_bytes()
+        if not data.startswith(PNG_SIGNATURE):
+            fail(f"English comics: not a PNG: {source.name}")
+        if sha_bytes(data) == full["entries"][name][1]:
+            fail(f"English comics: {source.name} is the Russian page, not the English one")
+        pages[name] = data
+    if missing:
+        fail(f"English comics: missing {len(missing)} pages, e.g. {', '.join(missing[:3])}")
+    with zipfile.ZipFile(io.BytesIO(full_pack)) as inner:
+        english_in_full = {name: inner.read(name) for name in en_pages}
+    result = {}
+    for variant, files in (("full", pages), ("lite", {**pages, **english_in_full})):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", allowZip64=True) as archive:
+            for name in sorted(files):
+                archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), files[name],
+                                 compress_type=zipfile.ZIP_STORED)
+        pack = buffer.getvalue()
+        entries = {name: [len(files[name]), sha_bytes(files[name])] for name in sorted(files)}
+        manifest = {"format": 1, "version": full["version"], "created": full["created"], "hachimi": full["hachimi"],
+                    "zip": "pack.zip", "files": len(entries), "bytes": sum(v[0] for v in entries.values()),
+                    "zip_bytes": len(pack), "entries": entries}
+        result[variant] = (validate_manifest(manifest, full["version"], f"English comics {variant}"), pack)
+    return result
+
+
 def descriptor(path: Path, repo: str, tag: str) -> dict:
     return {"url": f"https://github.com/{repo}/releases/download/{quote(tag)}/{quote(path.name)}",
             "size": path.stat().st_size, "sha256": sha_file(path)}
@@ -206,6 +263,9 @@ def prepare(args: argparse.Namespace) -> None:
     validate_family(current_packs["full"][0], current_packs["lite"][0], "current")
     if previous:
         validate_family(old_packs["full"][0], old_packs["lite"][0], "previous")
+    comics_en = getattr(args, "comics_en", None)
+    extras = (english_comics(current_packs["full"][0], current_packs["full"][1], current_packs["lite"][0], comics_en)
+              if comics_en else {})
     out.mkdir(parents=True)
     try:
         variants = {}
@@ -237,6 +297,17 @@ def prepare(args: argparse.Namespace) -> None:
                 metrics[variant] = {"changed": len(changed), "removed": len(set(old_manifest["entries"]) - set(manifest["entries"]))}
             variants[variant] = {"manifest": descriptor(manifest_file, args.repo, args.tag),
                                  "pack": descriptor(pack_file, args.repo, args.tag), "deltas": deltas}
+            if variant in extras:
+                # Optional: only launchers 1.3+ read "extras", and only for players who chose English comics.
+                extra_manifest, extra_pack = extras[variant]
+                extra_manifest_file = out / f"manifest-comics-en-{variant}.json"
+                extra_pack_file = out / f"comics-en-{variant}.zip"
+                write_json(extra_manifest_file, extra_manifest)
+                extra_pack_file.write_bytes(extra_pack)
+                upload.extend([extra_manifest_file.name, extra_pack_file.name])
+                variants[variant]["extras"] = {"comics_en": {"manifest": descriptor(extra_manifest_file, args.repo, args.tag),
+                                                             "pack": descriptor(extra_pack_file, args.repo, args.tag)}}
+                metrics[f"comics_en_{variant}"] = {"pages": extra_manifest["files"], "bytes": len(extra_pack)}
         channel = {"schema": 1, "tag": args.tag, "version": current["version"], "variants": variants}
         write_json(out / "channel.json", channel)
         upload.append("channel.json")
@@ -244,6 +315,7 @@ def prepare(args: argparse.Namespace) -> None:
                                         "assets": [{"name": name, "size": (out / name).stat().st_size,
                                                     "sha256": sha_file(out / name)} for name in upload]})
         write_json(out / "report.local.json", {"current_receipt": str(args.published.resolve()),
+                                               "comics_en": str(Path(comics_en).resolve()) if comics_en else None,
                                                "previous_receipt": str(args.previous.resolve()) if previous else None,
                                                "archives": {v: str(p) for v, p in archives.items()},
                                                "previous_archives": {v: str(p) for v, p in old_archives.items()},
@@ -443,7 +515,8 @@ def publish(args: argparse.Namespace) -> None:
         fail("Channel identity mismatch")
     assets = upload["assets"]
     names = [a["name"] for a in assets]
-    public_asset = re.compile(r"(?:channel\.json|manifest-(?:full|lite)\.json|pack-(?:full|lite)\.zip|delta-(?:full|lite)-r[0-9.]+-to-r[0-9.]+\.zip)\Z")
+    public_asset = re.compile(r"(?:channel\.json|manifest-(?:comics-en-)?(?:full|lite)\.json|pack-(?:full|lite)\.zip"
+                              r"|comics-en-(?:full|lite)\.zip|delta-(?:full|lite)-r[0-9.]+-to-r[0-9.]+\.zip)\Z")
     if (len(names) != len(set(names)) or "channel.json" not in names
             or any(not public_asset.fullmatch(n) for n in names)):
         fail("Invalid upload allowlist")
@@ -592,7 +665,8 @@ def release(args: argparse.Namespace) -> None:
         fail(f"Could not identify a unique approved receipt for {last}. Use prepare with --previous.")
     out = receipt.parent / ("online-" + tag)
     if not out.exists():
-        prepare(argparse.Namespace(published=receipt, previous=previous[0], tag=tag, repo=repo, out=out))
+        prepare(argparse.Namespace(published=receipt, previous=previous[0], tag=tag, repo=repo, out=out,
+                                   comics_en=getattr(args, "comics_en", None)))
     else:
         report = json_file(out / "report.local.json")
         identity = json_file(out / "upload.json")
@@ -611,10 +685,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--tag", required=True)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument("--comics-en", type=Path, help="Folder with English UmaTL comic pages (tex_comic_*.diff.png)")
     q = sub.add_parser("publish")
     q.add_argument("--out", required=True, type=Path)
     r = sub.add_parser("release", help="Publish the next approved player release to the live UmaRU channel")
     r.add_argument("--published", type=Path)
+    r.add_argument("--comics-en", type=Path, help="Folder with English UmaTL comic pages (tex_comic_*.diff.png)")
     s = sub.add_parser("publish-launcher", help="Publish a signed, versioned Windows launcher release")
     s.add_argument("--repo", default="kapitanzet3-a11y/UmaRU-Updates")
     s.add_argument("--installer", required=True, type=Path)

@@ -18,6 +18,7 @@
 """
 import ctypes
 import hashlib
+import io
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -372,6 +373,7 @@ class Pack:
     manifest: dict
     zip_path: Path
     installer: Path
+    sources: dict = field(default_factory=dict)   # файл -> другой zip (Path) или готовые байты; остальное из zip_path
 
     @property
     def version(self):
@@ -492,8 +494,26 @@ def pack_status(game_dir, pack, deep=False, progress=None):
     return st
 
 
+def drop_texture_cache(target, rel="", entries=()):
+    """Hachimi собирает X.png из картинки игры и X.diff.png и помнит это в X.png.srchash. Если X.diff.png сменился
+    (другой язык, новая версия) или убран, старую сборку надо выбросить, иначе игра покажет прежнюю картинку.
+    X.png, который сам входит в пакет (entries), — не сборка, его не трогаем."""
+    name = target.name
+    if not name.lower().endswith(".diff.png"):
+        return
+    if rel and rel[:-len(".diff.png")] + ".png" in entries:
+        return
+    built = target.with_name(name[:-len(".diff.png")] + ".png")
+    for path in (built, built.with_name(built.name + ".srchash")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def install_pack(game_dir, pack, rels, progress=None):
-    """Разложить из pack.zip только перечисленные файлы (пишет рядом .part и заменяет, проверяя хэш)."""
+    """Разложить из пакета только перечисленные файлы (пишет рядом .part и заменяет, проверяя хэш). Файлы берутся из
+    pack.zip или, если так указано в pack.sources, из другого архива (английские комиксы) или готовых байтов."""
     base = Path(game_dir) / HACHIMI_DIR
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -506,12 +526,24 @@ def install_pack(game_dir, pack, rels, progress=None):
         raise UmaError(f"На диске мало места: нужно около {(need + FREE_SPACE_MARGIN) // 2**20} МБ, свободно {free // 2**20} МБ.")
     done = 0
     try:
-        with zipfile.ZipFile(pack.zip_path) as zf:
-            names = set(zf.namelist())
-            for n, rel in enumerate(rels, 1):
+        with ExitStack() as stack:
+            archives = {}
+
+            def open_source(rel):
+                source = pack.sources.get(rel)
+                if isinstance(source, (bytes, bytearray)):
+                    return io.BytesIO(source)
+                path = Path(source) if source else Path(pack.zip_path)
+                if path not in archives:
+                    zf = stack.enter_context(zipfile.ZipFile(path))
+                    archives[path] = (zf, set(zf.namelist()))
+                zf, names = archives[path]
                 if rel not in names:
                     raise UmaError(f"В пакете перевода нет файла {rel}. Нажмите «Обновления перевода» "
                                    "или переустановите программу.")
+                return zf.open(rel)
+
+            for n, rel in enumerate(rels, 1):
                 size, sha = pack.entries[rel]
                 target = safe_join(base, rel, for_write=True)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +551,7 @@ def install_pack(game_dir, pack, rels, progress=None):
                 fd, temporary = tempfile.mkstemp(prefix=".umaru-", suffix=".part", dir=target.parent)
                 part = Path(temporary)
                 try:
-                    with os.fdopen(fd, "wb") as dst, zf.open(rel) as src:
+                    with os.fdopen(fd, "wb") as dst, open_source(rel) as src:
                         while chunk := src.read(1 << 20):
                             h.update(chunk)
                             dst.write(chunk)
@@ -528,6 +560,7 @@ def install_pack(game_dir, pack, rels, progress=None):
                     os.replace(part, target)
                 finally:
                     part.unlink(missing_ok=True)
+                drop_texture_cache(target, rel, pack.entries)
                 done += size
                 if progress and (n % 20 == 0 or n == len(rels)):
                     progress(done / max(1, need), f"Перевод: {n} из {len(rels)} файлов")
@@ -536,6 +569,106 @@ def install_pack(game_dir, pack, rels, progress=None):
     except zipfile.BadZipFile as e:
         raise UmaError("Архив перевода pack.zip повреждён. Нажмите «Обновления перевода» "
                        "или переустановите программу.") from e
+
+
+# ---------------------------------------------------------------- выбор языков по разделам
+
+CONTENT_PARTS = {           # раздел -> (название, языки по порядку показа; первый — по умолчанию)
+    "texts": ("Тексты", ("ru", "ja")),
+    "images": ("Надписи на картинках", ("ru", "ja")),
+    "comics": ("Комиксы", ("ru", "en", "ja")),
+    "movie": ("Ролик сюжета", ("ru", "ja")),
+}
+LANGUAGE_NAMES = {"ru": "Русский", "en": "Английский", "ja": "Японский"}
+_ALWAYS_FILES = ("config.json", "info.json")     # описание перевода для Hachimi нужно при любом выборе
+_IMAGE_DIRS = ("assets/textures/", "assets/atlas/", "assets/an_texture_sets/")
+_TEXT_CONFIG_REL = LD_DIR + "/config.json"
+
+
+def content_part(rel):
+    """Раздел перевода, к которому относится файл пакета: texts / images / comics / movie;
+    None — служебный файл, который ставится всегда."""
+    low = rel.lower()
+    prefix = LD_DIR + "/"
+    if low.startswith(prefix):
+        low = low[len(prefix):]
+    if low in _ALWAYS_FILES:
+        return None
+    if low.endswith(".usm"):
+        return "movie"
+    if low.startswith("assets/textures/outgame/comic/") and low.rsplit("/", 1)[-1].startswith("tex_comic"):
+        return "comics"
+    if low.startswith(_IMAGE_DIRS):
+        return "images"
+    return "texts"      # словари, сюжет, реплики, песни, шрифт includes_win
+
+
+def normalize_choices(choices):
+    """Выбор игрока из настроек -> {раздел: язык}; неизвестное и пропущенное — язык по умолчанию (русский)."""
+    choices = choices if isinstance(choices, dict) else {}
+    out = {}
+    for part, (_title, languages) in CONTENT_PARTS.items():
+        value = choices.get(part)
+        out[part] = value if value in languages else languages[0]
+    return out
+
+
+def load_choices():
+    return normalize_choices(load_settings().get("content"))
+
+
+def save_choices(choices):
+    save_settings({"content": normalize_choices(choices)})
+
+
+def _japanese_text_config(pack):
+    """config.json перевода для японского текста. Настройки текста из пакета (перенос строк под латиницу, шрифт,
+    удаление фуриганы, словари) испортили бы японский текст, поэтому остаётся только папка с картинками."""
+    assets_dir = "assets"
+    try:
+        with zipfile.ZipFile(pack.zip_path) as zf:
+            original = json.loads(zf.read(_TEXT_CONFIG_REL).decode("utf-8-sig"))
+        if isinstance(original, dict) and isinstance(original.get("assets_dir"), str):
+            assets_dir = original["assets_dir"]
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        pass
+    return (json.dumps({"assets_dir": assets_dir}, ensure_ascii=False, indent=4) + "\n").encode("utf-8")
+
+
+def compose_pack(pack, choices=None, comics_en=None):
+    """Пакет к установке по выбору игрока. Японский раздел — его файлов нет в составе (игра покажет оригинал, а уже
+    поставленные файлы apply_plan уберёт). Английские комиксы: страницы из comics_en заменяют русские, остальные
+    страницы пакета и так английские. Без comics_en английский выбор не применяется: комиксы остаются как в пакете.
+    Сам пакет (pack.zip в кэше) не меняется."""
+    if pack is None:
+        return None
+    choices = normalize_choices(choices)
+    english = choices["comics"] == "en" and comics_en is not None
+    if all(lang == "ru" for lang in choices.values()):
+        return pack
+    entries, sources = {}, dict(pack.sources)
+    for rel, spec in pack.entries.items():
+        part = content_part(rel)
+        lang = choices.get(part, "ru") if part else "ru"
+        if part == "comics" and lang == "en":
+            if english and rel in comics_en.entries:
+                continue                # русская страница: вместо неё английская ниже
+            lang = "ru"                 # страница и так английская (или английских нет вовсе)
+        if lang == "ja":
+            continue
+        entries[rel] = spec
+    if english:
+        for rel, spec in comics_en.entries.items():
+            if content_part(rel) == "comics":
+                entries[rel] = spec
+                sources[rel] = comics_en.zip_path
+    if choices["texts"] == "ja" and _TEXT_CONFIG_REL in entries:
+        data = _japanese_text_config(pack)
+        entries[_TEXT_CONFIG_REL] = [len(data), hashlib.sha256(data).hexdigest()]
+        sources[_TEXT_CONFIG_REL] = data
+    manifest = dict(pack.manifest, entries=entries, files=len(entries), bytes=sum(v[0] for v in entries.values()),
+                    content=choices)
+    return Pack(pack.root, manifest, pack.zip_path, pack.installer, sources)
 
 
 # ---------------------------------------------------------------- config.json Hachimi
@@ -698,8 +831,12 @@ def diagnose(ctx, deep=False, progress=None):
                 what.append(f"изменено {len(ps.changed)}")
             checks.append(Check("pack", "fail", "Перевод", "Файлы повреждены или удалены: " + ", ".join(what) + " — починим."))
             plan.append("pack")
-        elif ps.installed_version != pack.version or ps.stale or ps.obsolete:
+        elif ps.installed_version != pack.version:
             checks.append(Check("pack", "info", "Перевод", f"Есть новая версия: {ps.installed_version} → {pack.version}"))
+            plan.append("pack")
+        elif ps.stale or ps.obsolete:
+            count = len(ps.stale) + len(ps.obsolete)
+            checks.append(Check("pack", "info", "Перевод", f"Нужно применить выбранные языки: изменится файлов — {count}"))
             plan.append("pack")
         else:
             checks.append(Check("pack", "ok", "Перевод", f"Установлен · версия {pack.version}"))
@@ -852,6 +989,7 @@ def _apply_plan(ctx, plan, progress=None, deep=False):
                 if ctx.online and (not rel.startswith(LD_DIR + "/") or sha256_file(target) != state['entries'][rel]):
                     continue
                 target.unlink()
+                drop_texture_cache(target, rel, pack.entries)
             except FileNotFoundError:
                 pass
             except OSError as exc:

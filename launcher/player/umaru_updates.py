@@ -21,7 +21,7 @@ import urllib.request
 import uuid
 import zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import umaru_core as core
@@ -36,6 +36,8 @@ MAX_MEMBER = 8 * 1024**3
 MAX_FILES = 100_000
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$", re.I)
 _GITHUB_REDIRECTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+# Optional packs a channel variant may offer under "extras"; downloaded only on request.
+EXTRAS = {"comics_en": "comics"}     # name -> the only content part its files may belong to
 
 
 class UpdateError(Exception):
@@ -54,6 +56,8 @@ class Result:
     state: str
     message: str
     tag: str | None = None
+    extras: dict = field(default_factory=dict)     # requested optional packs: name -> core.Pack or None
+    offers: dict | None = None                      # optional packs on offer: name -> size; None — channel not read
 
 
 def _version(value):
@@ -522,8 +526,107 @@ def _lock(root):
                 fcntl.flock(file.fileno(), fcntl.LOCK_UN)
 
 
-def resolve(data_dir, channel, *, game_dir=None, progress=None):
-    """Check channel, verify assets, promote a complete pack, or keep last good pack."""
+def _extra_root(channel, name):
+    return _cache_root(channel).with_name(f"{channel.variant}.{name}")
+
+
+def _check_extra(name, manifest):
+    part = EXTRAS[name]
+    if any(core.content_part(rel) != part for rel in manifest["entries"]):
+        raise UpdateError("Дополнительный пакет перевода содержит чужие файлы")
+
+
+def cached_extra(data_dir, channel, name):
+    """Last verified optional pack (e.g. English comics) or None."""
+    if name not in EXTRAS:
+        return None
+    pack = _pointer_pack(_extra_root(channel, name), Path(data_dir) / "hachimi_installer.exe")
+    try:
+        if pack:
+            _check_extra(name, pack.manifest)
+    except UpdateError:
+        return None
+    return pack
+
+
+def _offers(variant, channel_url):
+    extras = variant.get("extras", {})
+    if not isinstance(extras, dict):
+        raise UpdateError("Неверный список дополнительных пакетов")
+    offers = {}
+    for name, spec in extras.items():
+        if name in EXTRAS and isinstance(spec, dict):
+            offers[name] = {"manifest": _asset(spec.get("manifest"), channel_url),
+                            "pack": _asset(spec.get("pack"), channel_url)}
+    return offers
+
+
+def _resolve_extra(data_dir, channel, name, spec, version, progress=None):
+    """Fetch one optional pack. Same checks as the main pack; reuse the cached ZIP when its files are unchanged."""
+    installer = Path(data_dir) / "hachimi_installer.exe"
+    root = _extra_root(channel, name)
+    local = cached_extra(data_dir, channel, name)
+    if local and local.version == version and _remote_receipt_matches(local, spec["manifest"]["sha256"]):
+        return local
+    raw_manifest = _download(spec["manifest"]["url"], channel.url, MAX_MANIFEST, expected=spec["manifest"])
+    manifest = _manifest(_json(raw_manifest, MAX_MANIFEST), version)
+    _check_extra(name, manifest)
+    root.mkdir(parents=True, exist_ok=True)
+    with _lock(root):
+        stage = root / (".stage-" + uuid.uuid4().hex)
+        stage.mkdir()
+        try:
+            (stage / "pack.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            if local and local.entries == manifest["entries"]:
+                _write_rebuilt(stage / "pack.zip", manifest, base_zip=local)
+            else:
+                label = "Скачиваем английские комиксы…"
+                if progress:
+                    progress(.1, label)
+                _download(spec["pack"]["url"], channel.url, MAX_ASSET, stage / "pack.zip", spec["pack"],
+                          (lambda frac, _message: progress(frac, label)) if progress else None)
+            if not _pack(stage, installer, staged=True):
+                raise UpdateError("Скачанный пакет не прошёл проверку")
+            _write_receipt(stage, digest_bytes(raw_manifest))
+            return _promote(root, stage, manifest, installer)
+        finally:
+            if stage.exists():
+                _safe_remove(root, stage)
+
+
+def resolve(data_dir, channel, *, game_dir=None, progress=None, extras=()):
+    """Check channel, verify assets, promote a complete pack, or keep last good pack.
+
+    extras names optional packs to fetch as well (EXTRAS). A failed optional
+    pack never fails the main result: the last verified copy, if any, is used.
+    """
+    seen = {}
+    result = _resolve_pack(data_dir, channel, game_dir=game_dir, progress=progress, seen=seen)
+    offers = None
+    if "variant" in seen:
+        try:
+            offers = _offers(seen["variant"], channel.url)
+        except UpdateError:
+            offers = {}
+    got = {}
+    for name in extras:
+        if name not in EXTRAS:
+            continue
+        pack = None
+        if offers and name in offers:
+            try:
+                pack = _resolve_extra(data_dir, channel, name, offers[name], seen["version"], progress)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, http.client.HTTPException,
+                    urllib.error.URLError, socket.timeout, UpdateError):
+                pack = None
+        got[name] = pack or cached_extra(data_dir, channel, name)
+    return replace(result, extras=got,
+                   offers=None if offers is None else {name: spec["pack"]["size"] for name, spec in offers.items()})
+
+
+def _resolve_pack(data_dir, channel, *, game_dir=None, progress=None, seen=None):
+    """Main pack: check channel, verify assets, promote a complete pack, or keep last good pack."""
+    seen = {} if seen is None else seen
     data_dir = Path(data_dir)
     local = cached_pack(data_dir, channel)
     root = _cache_root(channel)
@@ -554,6 +657,7 @@ def resolve(data_dir, channel, *, game_dir=None, progress=None):
         variant = variants.get(channel.variant)
         if not isinstance(variant, dict):
             raise UpdateError("Нет выбранного варианта перевода")
+        seen.update(variant=variant, version=version)
         manifest_asset = _asset(variant.get("manifest"), channel.url)
         pack_asset = _asset(variant.get("pack"), channel.url)
         deltas = variant.get("deltas", [])

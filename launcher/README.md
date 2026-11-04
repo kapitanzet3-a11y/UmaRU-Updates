@@ -13,6 +13,8 @@ python -m pip install -r requirements-build.txt
 python player/umaru_app.py
 ```
 
+Игрок выбирает язык по разделам (тексты, надписи на картинках, комиксы, ролик) в окне «Языки перевода». Выбор хранится в `%LOCALAPPDATA%\UmaRU\settings.json`; японский раздел лаунчер не кладёт в игру. Разделы файлов описаны в `umaru_core.content_part()`.
+
 Для проверки без открытия игры используйте `python player/umaru_app.py --check --json report.json`. В установленном мастере адрес канала и вариант перевода задаёт Inno Setup в `data/update-channel.json`.
 
 ## Сборка установщика
@@ -33,7 +35,7 @@ python setup/build_setup.py --build-dir ../../local-build --hachimi-installer D:
   python player_pack.py build --no-release --out ../../local-pack
   ```
 
-- `publish_online.py prepare` проверяет утверждённые квитанции выпусков и формирует `channel.json`, манифесты полного и облегчённого пакетов и дельты от предыдущей версии. `publish` загружает проверенные файлы в GitHub Releases. Команда `release` объединяет эти шаги для нового утверждённого выпуска. Для поиска предыдущей квитанции можно задать `UMA_RU_RELEASE_WORK`.
+- `publish_online.py prepare` проверяет утверждённые квитанции выпусков и формирует `channel.json`, манифесты полного и облегчённого пакетов и дельты от предыдущей версии. С `--comics-en ПАПКА` (английские страницы UmaTL `tex_comic_*.diff.png` для всех комиксов, у которых есть русский перевод) в выпуск добавляются необязательные `comics-en-full.zip` и `comics-en-lite.zip` с манифестами. Их скачивает только тот, кто выбрал в лаунчере английские комиксы. Лаунчер 1.2 этих файлов не замечает. Тот же параметр есть у команды `release`. `publish` загружает проверенные файлы в GitHub Releases. Команда `release` объединяет эти шаги для нового утверждённого выпуска. Для поиска предыдущей квитанции можно задать `UMA_RU_RELEASE_WORK`.
 - `publisher/sign-launcher.ps1` подписывает версию, размер, SHA-256 установщика и заметки для `launcher.json` ключом из хранилища Windows CNG издателя. В `player/umaru_launcher.py` находится открытый ключ для проверки. Для независимого канала выпуска понадобятся свой ключ издателя и соответствующий открытый ключ в клиенте.
 - `publish_online.py publish-launcher --installer PATH/UmaRU-Setup.exe --manifest PATH/launcher.json` публикует добровольное обновление лаунчера. Публикация требует авторизованного GitHub CLI с доступом к целевому репозиторию. Параметры каждой команды доступны через `--help`.
 
