@@ -609,17 +609,22 @@ def resolve(data_dir, channel, *, game_dir=None, progress=None, extras=()):
         except UpdateError:
             offers = {}
     got = {}
+    main = result.pack.version if result.pack else None
     for name in extras:
         if name not in EXTRAS:
             continue
         pack = None
-        if offers and name in offers:
+        # Fetch only for the release the main pack now matches; a failed main update keeps the old pair.
+        if offers and name in offers and main == seen.get("version"):
             try:
                 pack = _resolve_extra(data_dir, channel, name, offers[name], seen["version"], progress)
             except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, http.client.HTTPException,
                     urllib.error.URLError, socket.timeout, UpdateError):
                 pack = None
-        got[name] = pack or cached_extra(data_dir, channel, name)
+        if pack is None:
+            pack = cached_extra(data_dir, channel, name)
+        # Pages of another release would replace current ones and bring back removed pages.
+        got[name] = pack if pack is not None and pack.version == main else None
     return replace(result, extras=got,
                    offers=None if offers is None else {name: spec["pack"]["size"] for name, spec in offers.items()})
 

@@ -101,6 +101,12 @@ class Compose(unittest.TestCase):
         self.assertEqual(pack.entries[COMIC_EN], self.pack.entries[COMIC_EN])
         self.assertNotIn(COMIC_EN, pack.sources)
 
+    def test_english_from_another_release_is_ignored(self):
+        self.english.manifest["version"] = "2026.11.02-1200"
+        pack = core.compose_pack(self.pack, {"comics": "en"}, comics_en=self.english)
+        self.assertEqual(pack.entries[COMIC_RU], self.pack.entries[COMIC_RU])
+        self.assertNotIn(COMIC_RU, pack.sources)
+
     def test_english_without_extra_keeps_pack_comics(self):
         pack = core.compose_pack(self.pack, {"comics": "en"})
         self.assertEqual(pack.entries[COMIC_RU], self.pack.entries[COMIC_RU])

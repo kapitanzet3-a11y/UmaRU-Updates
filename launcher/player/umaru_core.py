@@ -635,14 +635,24 @@ def _japanese_text_config(pack):
     return (json.dumps({"assets_dir": assets_dir}, ensure_ascii=False, indent=4) + "\n").encode("utf-8")
 
 
+def matching_extra(pack, extra):
+    """Дополнительный пакет годится только к выпуску той же версии: страницы старого выпуска подменили бы новые
+    и вернули бы убранные (repro_stale_comics.log)."""
+    if pack is None or extra is None or extra.version != pack.version:
+        return None
+    return extra
+
+
 def compose_pack(pack, choices=None, comics_en=None):
     """Пакет к установке по выбору игрока. Японский раздел — его файлов нет в составе (игра покажет оригинал, а уже
     поставленные файлы apply_plan уберёт). Английские комиксы: страницы из comics_en заменяют русские, остальные
-    страницы пакета и так английские. Без comics_en английский выбор не применяется: комиксы остаются как в пакете.
+    страницы пакета и так английские. Без comics_en (или если он от другого выпуска) английский выбор не применяется:
+    комиксы остаются как в пакете.
     Сам пакет (pack.zip в кэше) не меняется."""
     if pack is None:
         return None
     choices = normalize_choices(choices)
+    comics_en = matching_extra(pack, comics_en)
     english = choices["comics"] == "en" and comics_en is not None
     if all(lang == "ru" for lang in choices.values()):
         return pack

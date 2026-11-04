@@ -177,6 +177,26 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(offline.state, "offline")
         self.assertEqual(offline.extras["comics_en"].version, "2026.11.03-1201")
 
+    def test_stale_english_comics_are_not_mixed_into_a_new_release(self):
+        # repro_stale_comics.log: новый выпуск, английские комиксы к нему не скачались
+        other = "localized_data_ru/assets/textures/outgame/comic/tex_comic_1002_01.diff.png"
+        self.publish("2026.11.03-1200", {self.COMIC: b"ru A", other: b"ru B"})
+        self.offer_english("2026.11.03-1200", {self.COMIC: b"en A", other: b"en B"})
+        self.assertEqual(updates.resolve(self.data, self.channel, extras=("comics_en",)).extras["comics_en"].version,
+                         "2026.11.03-1200")
+        self.publish("2026.11.04-1200", {self.COMIC: b"ru A2"})          # страница B убрана, A изменена
+        self.offer_english("2026.11.04-1200", {self.COMIC: b"en A2"})
+        self.server.files["/comics-en.zip"] = b"broken"                   # загрузка английских комиксов не удалась
+        result = updates.resolve(self.data, self.channel, extras=("comics_en",))
+        self.assertEqual(result.pack.version, "2026.11.04-1200")
+        self.assertIsNone(result.extras["comics_en"])
+        stale = updates.cached_extra(self.data, self.channel, "comics_en")
+        self.assertEqual(stale.version, "2026.11.03-1200")
+        pack = core.compose_pack(result.pack, {"comics": "en"}, comics_en=stale)
+        self.assertEqual(pack.entries, result.pack.entries)                # старые страницы не подмешаны
+        self.assertNotIn(other, pack.entries)
+        self.assertNotIn(self.COMIC, pack.sources)
+
     def test_foreign_files_in_english_comics_are_rejected(self):
         self.publish("2026.11.03-1200", {self.COMIC: b"ru"})
         self.offer_english("2026.11.03-1200", {"localized_data_ru/text_data_dict.json": b"{}"})

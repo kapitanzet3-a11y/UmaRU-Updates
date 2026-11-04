@@ -682,7 +682,7 @@ def build_window(args, pack):
                         detail = short_path(rep.game.path) + (f" · сборка {rep.game.buildid}" if rep.game.buildid else "")
                     if key == "pack" and summary:
                         detail += f"\nНе по-русски: {summary}."
-                        if choices["comics"] == "en" and not self.extras.get("comics_en"):
+                        if choices["comics"] == "en" and not self._english_comics():
                             detail += " Английских комиксов пока нет — оставлены комиксы из пакета."
                     row.set(chk.state, detail, chk.title)
                 else:
@@ -816,6 +816,10 @@ def build_window(args, pack):
                     self.refresh()
             self.run_bg(work, done)
 
+        def _english_comics(self):
+            """Английские комиксы того же выпуска, что и пакет перевода (иначе они не применяются)."""
+            return core.matching_extra(self.raw_pack, self.extras.get("comics_en"))
+
         def _language_hint(self, part, lang):
             """Пояснение под выбором языка: что именно получит игрок."""
             raw = self.raw_pack
@@ -839,7 +843,7 @@ def build_window(args, pack):
                         "Русские страницы; где перевода нет — английские.")
             if lang == "ja":
                 return "Оригинальные японские комиксы."
-            if self.extras.get("comics_en"):
+            if self._english_comics():
                 return "Английские страницы для всех комиксов (уже скачаны)."
             if not self.online:
                 return "Английские комиксы докачиваются только в программе с онлайн-обновлениями."
@@ -911,7 +915,7 @@ def build_window(args, pack):
             log.info("Языки перевода: %s", choices_summary(choices) or "всё на русском")
             self.banner_note = None
             self.apply_requested = True
-            if self.online and choices["comics"] == "en" and not self.extras.get("comics_en"):
+            if self.online and choices["comics"] == "en" and not self._english_comics():
                 self.channel_checked = False      # английские комиксы надо скачать: проверим канал заново
             self.refresh()
 
