@@ -120,6 +120,7 @@ def apply_theme(root, dark=None):
     style.configure("Hint.TLabel", foreground=t.muted, font=(FONT, 9))
     style.configure("Body.TLabel", font=(FONT, 10))
     style.configure("Secondary.TButton", font=(FONT, 10), padding=(px(14), px(7)))
+    style.configure("Secondary.Accent.TButton", font=(FONT, 10), padding=(px(14), px(7)))   # акцентная, но размером как обычная
     style.configure("Heading.TLabel", font=(FONT_SEMI, 11))
     style.configure("Title.TLabel", font=(FONT_SEMI, 13))
     style.configure("Header.TLabel", font=(FONT_SEMI, 17))
@@ -253,13 +254,13 @@ class StatusSummary(ttk.Frame):
         self.columnconfigure(1, weight=1)
         self.size = px(40)
         self.icon = tk.Canvas(self, width=self.size, height=self.size, highlightthickness=0, bg=THEME.bg)
-        self.icon.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, px(14)), pady=(px(2), 0))
+        self.icon.grid(row=0, column=0, rowspan=2, padx=(0, px(14)))
         self.title_label = ttk.Label(self, text=title, style="Title.TLabel")
         self.title_label.grid(row=0, column=1, sticky="w")
-        self.detail_label = HintLabel(self, detail)
+        self.detail_label = HintLabel(self, "")
         self.detail_label.grid(row=1, column=1, sticky="we")
         self.status = state  # не state: так называется метод ttk-виджета
-        self.set(state)
+        self.set(state, detail=detail)
 
     def set(self, state=None, title=None, detail=None):
         if state is not None:
@@ -269,6 +270,12 @@ class StatusSummary(ttk.Frame):
             self.title_label.configure(text=title)
         if detail is not None:
             self.detail_label.configure(text=detail)
+            if detail:
+                self.detail_label.grid()
+                self.title_label.grid_configure(rowspan=1, sticky="sw")
+            else:
+                self.detail_label.grid_remove()     # без пояснения заголовок стоит по центру значка
+                self.title_label.grid_configure(rowspan=2, sticky="w")
 
     def _draw(self):
         c, s = self.icon, self.size
@@ -344,9 +351,14 @@ class Header(ttk.Frame):
         ttk.Label(self, text=title, style="Header.TLabel").grid(row=0, column=1, sticky="w")
         self.subtitle = HintLabel(self, subtitle)
         self.subtitle.grid(row=1, column=1, sticky="we")
+        self.set_subtitle(subtitle)
 
     def set_subtitle(self, text):
         self.subtitle.configure(text=text)
+        if text:
+            self.subtitle.grid()
+        else:
+            self.subtitle.grid_remove()         # пустая строка не занимает место
 
 
 class LogBox(ttk.Frame):

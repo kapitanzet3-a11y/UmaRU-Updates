@@ -37,7 +37,6 @@ import umaru_launcher as launcher  # noqa: E402
 from _launcher_version import APP_VERSION  # noqa: E402
 
 APP_TITLE = "Лаунчер Uma RU"          # одно имя везде: окно, меню «Пуск», установщик, README
-SUBTITLE = "Русский перевод Umamusume"
 SHORTCUT_NAME = "Играть на русском (Uma RU)"
 INSTANCE_MUTEX = "UmaRUPlayerSingleInstance"     # это же имя проверяет деинсталлятор в setup/UmaRU.iss
 SHOW_EVENT = "UmaRUPlayerShowWindow"             # вторая копия просит открытое окно показаться
@@ -236,8 +235,8 @@ def build_window(args, pack):
             self.game = None
             self.busy = False
             self.auto_done = False
-            self.log_visible = False
             self.banner_note = None
+            self.last_summary = ("busy", "Проверяю…")   # главный статус, к которому окно вернётся после занятости
             self.raw_pack = pack           # пакет как скачан; self.pack_ — он же по выбору языков (compose_pack)
             self.extras = {}               # дополнительные пакеты (английские комиксы)
             self.offers = None             # что канал предлагает докачать; None — канал ещё не проверяли
@@ -254,9 +253,11 @@ def build_window(args, pack):
             self.channel_result = None
             self.reveal_job = None
             self.play_requested = False   # ярлык «Играть» нажали, пока окно уже было открыто
-            K.center_window(self, 560, 600)
-            self.minsize(K.px(520), K.px(300))
+            self.width = K.px(560)
+            K.center_window(self, 560, 360)
+            self.minsize(K.px(480), K.px(200))
             self._build()
+            self._fit_height()             # высота по содержимому ещё до показа: окно не прыгает при открытии
             K.dark_title_bar(self, K.THEME.dark)
             self.protocol("WM_DELETE_WINDOW", self._on_close)
             self._poll_job = self.after(60, self._poll)
@@ -276,87 +277,57 @@ def build_window(args, pack):
 
         def _build(self):
             px = K.px
-            outer = ttk.Frame(self, padding=(px(24), px(20), px(24), px(14)))
+            outer = ttk.Frame(self, padding=(px(24), px(20), px(24), px(16)))
             outer.pack(fill="both", expand=True)
             outer.columnconfigure(0, weight=1)
             self.outer = outer
-            self.header = K.Header(outer, "Uma RU", SUBTITLE)
+            self.header = K.Header(outer, "Uma RU")
             self.header.grid(row=0, column=0, sticky="we")
             self.banner = K.Banner(outer)
             self.banner.grid(row=1, column=0, sticky="we", pady=(px(14), 0))
             self.banner.hide()
-            # Главное одной строкой: готово ли к игре. Состояние по частям — под кнопкой «Подробности».
+            # Главное одной строкой: готово ли к игре
             self.card = K.Card(outer)
             self.card.grid(row=2, column=0, sticky="we", pady=(px(14), 0))
             self.card.body.columnconfigure(0, weight=1)
-            self.summary = K.StatusSummary(self.card.body, "Проверяю…", "Ищу игру и проверяю перевод.")
+            self.summary = K.StatusSummary(self.card.body, "Проверяю…")
             self.summary.grid(row=0, column=0, sticky="we")
             self.btn_languages = ttk.Button(self.card.body, text="Языки…", style="Secondary.TButton",
                                             command=self.choose_languages)
-            self.btn_languages.grid(row=0, column=1, sticky="ne", padx=(px(12), 0))
+            self.btn_languages.grid(row=0, column=1, sticky="e", padx=(px(12), 0))
             self.btn_languages.state(["disabled"])
             self.primary = K.primary_button(outer, "Проверяю…", self._on_primary)
             self.primary.grid(row=3, column=0, sticky="we", pady=(px(18), 0))
             self.primary.state(["disabled"])
-            self.hint = K.HintLabel(outer, "")
-            self.hint.grid(row=4, column=0, sticky="we", pady=(px(6), 0))
-            self.progress = ttk.Progressbar(outer, maximum=1000)
-            self.progress.grid(row=5, column=0, sticky="we", pady=(px(10), 0))
+            # Место под полосу прогресса занято всегда: окно не меняет высоту, когда она появляется
+            slot = ttk.Frame(outer, height=px(18))
+            slot.grid(row=4, column=0, sticky="we", pady=(px(10), 0))
+            slot.grid_propagate(False)
+            slot.columnconfigure(0, weight=1)
+            slot.rowconfigure(0, weight=1)
+            self.progress = ttk.Progressbar(slot, maximum=1000)
+            self.progress.grid(row=0, column=0, sticky="we")
             self.progress.grid_remove()
-            self.progress_text = K.HintLabel(outer, "")
-            self.progress_text.grid(row=6, column=0, sticky="we", pady=(px(4), 0))
-            self.progress_text.grid_remove()
             row = ttk.Frame(outer)
-            row.grid(row=7, column=0, sticky="we", pady=(px(12), 0))
+            row.grid(row=5, column=0, sticky="we", pady=(px(6), 0))
             row.columnconfigure(2, weight=1)
             # «Починить» и «Новый лаунчер» видны, только когда они нужны
             self.btn_repair = ttk.Button(row, text="Починить", style="Secondary.TButton", command=self.repair_all)
             self.btn_repair.grid(row=0, column=0, sticky="w", padx=(0, px(8)))
             self.btn_repair.grid_remove()
-            self.btn_launcher = ttk.Button(row, text="Новый лаунчер…", style="Accent.TButton", command=self._show_launcher_offer)
+            self.btn_launcher = ttk.Button(row, text="Новый лаунчер…", style="Secondary.Accent.TButton", command=self._show_launcher_offer)
             self.btn_launcher.grid(row=0, column=1, sticky="w")
             self.btn_launcher.grid_remove()
-            self.btn_log = ttk.Button(row, text="Подробности", style="Secondary.TButton", command=self.toggle_log)
-            self.btn_log.grid(row=0, column=3, sticky="e", padx=(0, px(8)))
             self.btn_more = ttk.Button(row, text="Дополнительно ▾", style="Secondary.TButton", command=self._more_menu)
-            self.btn_more.grid(row=0, column=4, sticky="e")
-            self.details = ttk.Frame(outer)
-            self.details.grid(row=8, column=0, sticky="nsew", pady=(px(14), 0))
-            self.details.columnconfigure(0, weight=1)
-            self.details.rowconfigure(1, weight=1)
-            parts = K.Card(self.details, "По частям")
-            parts.grid(row=0, column=0, sticky="we")
-            self.row_game = K.StatusRow(parts.body, "Игра", "Проверяю…")
-            self.row_hachimi = K.StatusRow(parts.body, "Hachimi", "")
-            self.row_pack = K.StatusRow(parts.body, "Перевод", "")
-            self.row_extra = K.StatusRow(parts.body, "", "")
-            for status_row in (self.row_game, self.row_hachimi, self.row_pack):
-                status_row.pack(fill="x", pady=(0, px(10)))
-            if self.online:
-                self.row_online = K.StatusRow(parts.body, "Обновления", "Проверю при запуске")
-                self.row_online.pack(fill="x", pady=(0, px(10)))
-            self.row_extra.pack(fill="x")
-            self.row_extra.pack_forget()
-            self.log_box = K.LogBox(self.details, height=7)
-            self.log_box.grid(row=1, column=0, sticky="nsew", pady=(px(12), 0))
-            self.details.grid_remove()
-            outer.rowconfigure(8, weight=1)
-            handler = _QueueHandler(self.q, self.log_box)
-            handler.setLevel(logging.INFO)
-            logging.getLogger("umaru").addHandler(handler)
+            self.btn_more.grid(row=0, column=3, sticky="e")
             self.menu = tk.Menu(self, tearoff=False)
             if self.online:
-                self.menu.add_command(label="Проверить обновления перевода", command=self.check_updates)
-                self.menu.add_command(label="Проверить обновления лаунчера…", command=self.check_launcher)
-                self.menu.add_separator()
-            for label, cmd in (("Языки перевода…", self.choose_languages), ("Полная проверка и починка", self.repair_all),
-                               ("Выбрать папку игры…", self.pick_game), ("Открыть папку игры", self.open_game_dir),
-                               ("Создать ярлык на рабочем столе", self.make_shortcut), ("Открыть журнал", self.open_log),
-                               ("Скопировать отчёт для того, кто помогает", self.copy_report)):
+                self.menu.add_command(label="Проверить обновления", command=self.check_all_updates)
+            for label, cmd in (("Проверить и починить", self.repair_all), ("Выбрать папку игры…", self.pick_game),
+                               ("Скопировать отчёт для поддержки", self.copy_report)):
                 self.menu.add_command(label=label, command=cmd)
             self.menu.add_separator()
-            self.menu.add_command(label="Удалить русификатор и Hachimi…", command=self.uninstall)
-            self.menu.add_command(label="Удалить всё, включая лаунчер…", command=self.uninstall_everything)
+            self.menu.add_command(label="Удалить Uma RU…", command=self.uninstall_everything)
             self.menu.add_command(label="О лаунчере", command=self.about)
 
         # ---------- служебное
@@ -400,18 +371,19 @@ def build_window(args, pack):
             for w in (self.primary, self.btn_repair, self.btn_more, self.btn_languages, self.btn_launcher):
                 w.state(state)
             if busy:
-                self.progress.grid()
-                self.progress_text.grid()
+                self.progress.configure(mode="determinate")
                 self.progress["value"] = 0
-                self.progress_text.configure(text=text)
+                self.progress.grid()
+                self.summary.set("busy", text or "Подождите…")
             else:
+                self.progress.stop()
                 self.progress.grid_remove()
-                self.progress_text.grid_remove()
+                self.summary.set(*self.last_summary)
 
         def set_progress(self, frac, text):
             self.progress["value"] = int(frac * 1000)
             if text:
-                self.progress_text.configure(text=text)
+                self.summary.set(title=text)
 
         def _show_if_working(self):
             self.reveal_job = None
@@ -454,15 +426,6 @@ def build_window(args, pack):
                 self.apply(self.report.plan, then_play=True)
             # остальное (нет игры, игра запущена, Steam обновляет…) решает человек: окно уже на виду
 
-        def toggle_log(self, show=None):
-            """«Подробности»: состояние по частям (игра, Hachimi, перевод…) и журнал."""
-            self.log_visible = (not self.log_visible) if show is None else show
-            if self.log_visible:
-                self.details.grid()
-            else:
-                self.details.grid_remove()
-            self.after(30, self._fit_height)
-
         # ---------- диагностика и показ
 
         def check_updates(self):
@@ -477,21 +440,26 @@ def build_window(args, pack):
             self.banner.show(*self.banner_note)
             self.after_idle(self._fit_height)
 
-        def check_launcher(self):
+        def check_all_updates(self):
+            """«Проверить обновления»: сначала версия лаунчера (вышла новая — предложение), затем перевод."""
             if self.busy:
                 return
-            self.set_busy(True, "Проверяем версию лаунчера…")
+            self.set_busy(True, "Проверяю обновления…")
 
             def checked(offer, error):
                 self.set_busy(False)
-                if error:
-                    self.launcher_notice("err", str(error))
-                elif offer is None:
-                    self.launcher_notice("ok", f"У вас актуальная версия лаунчера {APP_VERSION}.")
-                else:
+                if offer is not None:
                     self._set_launcher_offer(offer)
                     self.launcher_prompted = True
                     self.offer_launcher(offer)
+                    return
+                if error:
+                    self.launcher_notice("err", str(error))
+                else:
+                    self.launcher_notice("ok", f"Лаунчер {APP_VERSION} — последняя версия.")
+                self.channel_checked = False
+                self.auto_done = False      # найденное обновление перевода поставим сами, как при запуске
+                self.refresh()
             self.run_bg(lambda: launcher.check(APP_VERSION), checked)
 
         def _check_launcher_quietly(self):
@@ -582,7 +550,7 @@ def build_window(args, pack):
             def accept():
                 dialog.destroy()
                 self.download_launcher(offer)
-            ttk.Button(buttons, text="Скачать и установить", style="Accent.TButton", command=accept).pack(side="right")
+            ttk.Button(buttons, text="Скачать и установить", style="Secondary.Accent.TButton", command=accept).pack(side="right")
             dialog.bind("<Escape>", lambda _event: postpone())
             dialog.protocol("WM_DELETE_WINDOW", postpone)
             dialog.update_idletasks()
@@ -653,7 +621,9 @@ def build_window(args, pack):
             apply_requested, self.apply_requested = self.apply_requested, False
             if error is not None:
                 self.deiconify()
-                self.summary.set("fail", "Не удалось проверить игру", str(error))
+                self.last_summary = ("fail", "Не удалось проверить игру")
+                self.summary.set(*self.last_summary)
+                self.banner.show("err", str(error))
                 self.primary.configure(text="Проверить снова")
                 self.primary.state(["!disabled"])
                 return
@@ -663,10 +633,6 @@ def build_window(args, pack):
                 self.channel_result = checked
                 if checked.offers is not None:
                     self.offers = dict(checked.offers)
-                release = f" · {checked.tag}" if checked.tag and checked.state in ('current', 'updated') else ""
-                variant = updates.read_channel(pack_root())
-                edition = 'облегчённый вариант' if variant and variant.variant == 'lite' else 'полный вариант'
-                self.header.set_subtitle(f"{SUBTITLE} · {edition}{release}")
                 if checked.state in ('offline', 'error'):
                     log.info("%s", checked.message)
             self.render()
@@ -685,53 +651,18 @@ def build_window(args, pack):
 
         def render(self):
             rep = self.report
-            c = {x.key: x for x in rep.checks}
-            choices = core.load_choices()
-            summary = choices_summary(choices)
-            for row, key in ((self.row_game, "game"), (self.row_hachimi, "hachimi"), (self.row_pack, "pack")):
-                chk = c.get(key)
-                if chk:
-                    detail = chk.detail
-                    if key == "game" and rep.game is not None:
-                        detail = short_path(rep.game.path) + (f" · сборка {rep.game.buildid}" if rep.game.buildid else "")
-                    if key == "pack" and summary:
-                        detail += f"\nНе по-русски: {summary}."
-                        if choices["comics"] == "en" and not self._english_comics():
-                            detail += " Английских комиксов пока нет — оставлены комиксы из пакета."
-                    row.set(chk.state, detail, chk.title)
-                else:
-                    row.set("off", "—")
-            if self.online:
-                online = self.channel_result
-                if online is None:
-                    self.row_online.set("info", "Ожидаю выбора папки игры")
-                elif online.state in ("offline", "error"):
-                    self.row_online.set("warn", online.message)
-                elif online.state == "updated":
-                    self.row_online.set("ok", f"Выпуск {online.tag} загружен")
-                else:
-                    self.row_online.set("ok", online.message)
-            extra = next((c[k] for k in ("build", "config") if k in c), None)   # «Steam» и «Игра запущена» — в плашке сверху
-            if extra:
-                self.row_extra.set(extra.state, extra.detail, extra.title)
-                self.row_extra.pack(fill="x")
-            else:
-                self.row_extra.pack_forget()
-            labels = {"no_game": ("Указать папку игры…", "Укажите папку, где лежит UmamusumePrettyDerby_Jpn.exe."),
-                      "blocked": ("Проверить снова", "Когда игра закроется (или Steam закончит обновление), нажмите «Проверить снова»."),
-                      "not_installed": ("Установить русификатор", "Около 400 МБ, примерно минута. Игру нужно закрыть."),
-                      "update": ("Обновить перевод и играть", "Обновим только изменившиеся файлы."),
-                      "repair": ("Починить и играть", "Вернём Hachimi и перевод на место."),
-                      "installed_only": ("▶  Играть на русском", "Можно играть с уже установленным переводом."),
-                      "need_channel": ("Повторить проверку", "Подключитесь к интернету, чтобы загрузить выпуск перевода."),
-                      "ok": ("▶  Играть на русском", "Игру можно запускать и обычным способом из Steam — перевод включится сам.")}
-            text, hint = labels[rep.mode]
+            labels = {"no_game": "Указать папку игры…", "blocked": "Проверить снова",
+                      "not_installed": "Установить русификатор", "update": "Обновить перевод и играть",
+                      "repair": "Починить и играть", "installed_only": "▶  Играть на русском",
+                      "need_channel": "Повторить проверку", "ok": "▶  Играть на русском"}
+            text = labels[rep.mode]
             if not self.online and self.pack_ is None and rep.mode not in ("no_game",):
-                text, hint = "Проверить снова", "Распакуйте архив с лаунчером целиком (не запускайте из архива) и откройте UmaRU.exe из папки."
+                text = "Проверить снова"
             self.primary.configure(text=text)
             self.primary.state(["!disabled"] if not self.busy else ["disabled"])
-            self.hint.configure(text=hint)
-            self.summary.set(*self._summary(rep, c, summary))
+            self.last_summary = self._summary(rep)
+            if not self.busy:
+                self.summary.set(*self.last_summary)
             if rep.mode == "repair" and self.pack_:
                 self.btn_repair.grid()
             else:
@@ -742,46 +673,27 @@ def build_window(args, pack):
                 self.banner.hide()                    # состояние игры показывает главный статус, плашка — только для итогов
             self.after(50, self._fit_height)
 
-        def _summary(self, rep, checks, languages):
-            """(состояние, заголовок, пояснение) главного статуса по итогам проверки."""
-            def reason(*keys):
-                for key in keys:
-                    chk = checks.get(key)
-                    if chk and chk.state in ("fail", "warn", "info") and chk.detail:
-                        lower = chk.detail[:1].lower() + chk.detail[1:]
-                        return {"hachimi": f"Hachimi: {lower}", "build": f"Игра обновилась: {lower}"}.get(key, chk.detail)
-                return ""
-            extra = f" Не по-русски: {languages}." if languages else ""
-            if core.load_choices()["comics"] == "en" and not self._english_comics():
-                extra += " Английских комиксов пока нет."
+        def _summary(self, rep):
+            """(состояние, заголовок) главного статуса: заголовок сам говорит, что делать."""
             mode = rep.mode
-            if mode == "ok":
-                when = f"Перевод от {pretty_date(self.pack_.version)}." if self.pack_ else "Перевод на месте."
-                return "ok", "Готово к игре", when + extra
-            if mode == "installed_only":
-                return "ok", "Можно играть", "Проверить обновления перевода сейчас не удалось." + extra
+            if not self.online and self.pack_ is None and mode != "no_game":
+                return "fail", "Нет файлов перевода рядом с лаунчером"
             if mode == "update":
-                pack = checks.get("pack")
-                title = ("Нужно применить языки" if pack and pack.detail.startswith("Нужно применить")
-                         else "Есть новая версия перевода")
-                return "info", title, reason("pack")
-            if mode == "repair":
-                return "warn", "Нужна починка", reason("hachimi", "pack", "build", "config") or "Игра обновилась или файлы повреждены."
-            if mode == "not_installed":
-                return "info", "Русификатор ещё не установлен", "Поставим Hachimi и русский перевод." + extra
+                pack = rep.check("pack")
+                if pack and pack.detail.startswith("Нужно применить"):
+                    return "info", "Нужно применить языки"
+                return "info", "Есть новая версия перевода"
             if mode == "blocked":
-                return "warn", "Сейчас нельзя менять файлы", rep.blocked
-            if mode == "need_channel":
-                return "warn", "Нужен интернет", reason("pack") or "Перевод ещё не загружен."
-            if mode == "no_game":
-                return "fail", "Игра не найдена", "Лаунчер не нашёл её в библиотеках Steam."
-            return "off", "", ""
+                return "warn", "Steam обновляет игру" if "Steam" in rep.blocked else "Закройте игру"
+            return {"ok": ("ok", "Готово к игре"), "installed_only": ("ok", "Можно играть"),
+                    "repair": ("warn", "Нужна починка"), "not_installed": ("info", "Русификатор не установлен"),
+                    "need_channel": ("warn", "Нужен интернет"), "no_game": ("fail", "Игра не найдена")}.get(mode, ("off", ""))
 
         def _fit_height(self):
             """Высота окна по содержимому: без пустого поля снизу и без обрезания."""
             self.update_idletasks()
-            width = max(self.winfo_width(), K.px(540))   # пока окно скрыто (--play), winfo_width() == 1
-            self.geometry(f"{width}x{self.outer.winfo_reqheight()}")
+            width = self.winfo_width() if self.winfo_ismapped() else self.width   # пока окно скрыто, ширина ещё 1
+            self.geometry(f"{max(width, K.px(480))}x{self.outer.winfo_reqheight()}")
 
         def _auto(self):
             """Что делаем сами при открытии: после обновления — чиним без вопросов, по ярлыку — ещё и запускаем игру."""
@@ -832,7 +744,7 @@ def build_window(args, pack):
                 return
             ctx = core.Context(self.game, self.pack_, online=self.online)
             self.banner_note = None
-            self.banner.show("info", "Работаю… Окно можно не закрывать, это займёт около минуты.")
+            self.banner.hide()
             self.set_busy(True, "Начинаю…")
             self.reveal_job = self.after(1200, self._show_if_working)
 
@@ -846,7 +758,7 @@ def build_window(args, pack):
                     return
                 if error is not None:
                     self.deiconify()
-                    self.banner_note = ("err", str(error), "Подробности", lambda: self.toggle_log(True))
+                    self.banner_note = ("err", str(error), "Скопировать отчёт", self.copy_report)
                     self.banner.show(*self.banner_note)
                     log.error("%s", error)
                     self.refresh()
@@ -867,41 +779,15 @@ def build_window(args, pack):
             """Английские комиксы того же выпуска, что и пакет перевода (иначе они не применяются)."""
             return core.matching_extra(self.raw_pack, self.extras.get("comics_en"))
 
-        def _language_hint(self, part, lang):
-            """Пояснение под выбором языка: что именно получит игрок."""
-            raw = self.raw_pack
-            entries = raw.entries if raw else {}
-            channel = updates.read_channel(pack_root()) if self.online else None
-            lite = channel is not None and channel.variant == "lite"
-            if part == "texts":
-                return {"ru": "Сюжет, меню, навыки, реплики и песни на русском.",
-                        "ja": "Японский текст игры. Картинки и комиксы — как выбрано ниже."}[lang]
-            if part == "images":
-                return {"ru": "Названия скачек, имена в гаче, баннеры и кнопки на русском.",
-                        "ja": "Оригинальные японские картинки."}[lang]
-            if part == "movie":
-                if lang == "ja":
-                    return "Оригинальный японский ролик."
-                if raw and not any(core.content_part(r) == "movie" for r in entries):
-                    return "В облегчённом варианте перевода ролика нет: он останется японским."
-                return "Ролик с русскими субтитрами."
-            if lang == "ru":
-                return ("Русские страницы; где перевода нет — японские." if lite else
-                        "Русские страницы; где перевода нет — английские.")
-            if lang == "ja":
-                return "Оригинальные японские комиксы."
+        def _english_available(self):
+            """Английские комиксы можно выбрать: уже скачаны или канал их предлагает (пока не проверяли — тоже да)."""
             if self._english_comics():
-                return "Английские страницы для всех комиксов (уже скачаны)."
-            if not self.online:
-                return "Английские комиксы докачиваются только в лаунчере с онлайн-обновлениями."
-            if self.offers is not None and "comics_en" not in self.offers:
-                return "Английские комиксы появятся с одним из следующих выпусков перевода."
-            size = (self.offers or {}).get("comics_en")
-            return "Английские страницы для всех комиксов. Скачаются отдельно" + (
-                f", около {max(1, round(size / 2**20))} МБ." if size else ".")
+                return True
+            return self.online and (self.offers is None or "comics_en" in self.offers)
 
         def choose_languages(self):
-            """Окно «Языки перевода»: для каждого раздела — русский, японский оригинал (и английский для комиксов)."""
+            """Окно «Языки перевода»: для каждого раздела — русский, японский оригинал (и английский для комиксов).
+            Без пояснений мелким шрифтом: недоступный вариант просто неактивен."""
             if self.busy:
                 return
             current = core.load_choices()
@@ -909,47 +795,36 @@ def build_window(args, pack):
             dialog.withdraw()
             dialog.transient(self)
             dialog.title("Языки перевода")
-            body = ttk.Frame(dialog, padding=K.px(18))
+            dialog.resizable(False, False)
+            body = ttk.Frame(dialog, padding=K.px(20))
             body.pack(fill="both", expand=True)
-            body.columnconfigure(0, weight=1)
-            ttk.Label(body, text="Языки перевода", style="Header.TLabel").grid(row=0, column=0, sticky="w")
-            K.HintLabel(body, "Японский — оригинал игры: файлы этого раздела не ставятся, а уже поставленные "
-                              "убираются. Выбор применится сразу после сохранения.", wrap=460).grid(
-                row=1, column=0, sticky="we", pady=(K.px(2), K.px(12)))
-            variables, hints = {}, {}
-
-            def update_hints():
-                for name, label in hints.items():
-                    label.configure(text=self._language_hint(name, variables[name].get()))
-
-            for row, (part, (title, languages)) in enumerate(core.CONTENT_PARTS.items(), start=2):
-                frame = ttk.Frame(body)
-                frame.grid(row=row, column=0, sticky="we", pady=(0, K.px(12)))
-                frame.columnconfigure(0, weight=1)
-                ttk.Label(frame, text=title, style="Heading.TLabel").grid(row=0, column=0, sticky="w")
+            variables = {}
+            for row, (part, (title, languages)) in enumerate(core.CONTENT_PARTS.items()):
+                ttk.Label(body, text=title, style="Heading.TLabel").grid(row=row, column=0, sticky="w", pady=K.px(6),
+                                                                        padx=(0, K.px(24)))
                 variables[part] = tk.StringVar(master=dialog, value=current[part])
-                radios = ttk.Frame(frame)
-                radios.grid(row=1, column=0, sticky="w", pady=(K.px(4), K.px(4)))
+                radios = ttk.Frame(body)
+                radios.grid(row=row, column=1, sticky="w", pady=K.px(6))
                 for lang in languages:      # одинаковые переключатели-плашки для всех разделов
-                    ttk.Radiobutton(radios, text=core.LANGUAGE_NAMES[lang], value=lang, variable=variables[part],
-                                    style="Toggle.TButton", command=update_hints).pack(side="left", padx=(0, K.px(4)))
-                hints[part] = K.HintLabel(frame, "", wrap=460)
-                hints[part].grid(row=2, column=0, sticky="we")
-            update_hints()
+                    toggle = ttk.Radiobutton(radios, text=core.LANGUAGE_NAMES[lang], value=lang, variable=variables[part],
+                                             style="Toggle.TButton")
+                    toggle.pack(side="left", padx=(0, K.px(4)))
+                    if part == "comics" and lang == "en" and not self._english_available():
+                        toggle.state(["disabled"])
             buttons = ttk.Frame(body)
-            buttons.grid(row=len(core.CONTENT_PARTS) + 2, column=0, sticky="we", pady=(K.px(6), 0))
+            buttons.grid(row=len(core.CONTENT_PARTS), column=0, columnspan=2, sticky="we", pady=(K.px(16), 0))
             ttk.Button(buttons, text="Отмена", style="Secondary.TButton", command=dialog.destroy).pack(side="left")
 
             def save():
                 choices = {part: var.get() for part, var in variables.items()}
                 dialog.destroy()
                 self._apply_choices(choices)
-            ttk.Button(buttons, text="Сохранить и применить", style="Accent.TButton", command=save).pack(side="right")
+            ttk.Button(buttons, text="Сохранить", style="Secondary.Accent.TButton", command=save).pack(side="right")
             dialog.bind("<Escape>", lambda _event: dialog.destroy())
             dialog.update_idletasks()
             x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_reqwidth()) // 2
             y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_reqheight()) // 2
-            dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+            dialog.geometry(f"{dialog.winfo_reqwidth()}x{dialog.winfo_reqheight()}+{max(0, x)}+{max(0, y)}")
             dialog.deiconify()
             dialog.grab_set()
 
@@ -985,7 +860,7 @@ def build_window(args, pack):
                 self.banner.show("err", f"Не удалось запустить игру через Steam: {e}")
                 return
             log.info("Игра запущена через Steam")
-            self.banner.show("ok", "Игра запускается…")
+            self.banner.hide()
             self.set_busy(True, "Запускаю игру…")
             self.progress.configure(mode="indeterminate")
             self.progress.start(14)
@@ -1016,27 +891,6 @@ def build_window(args, pack):
             self.channel_checked = False
             self.refresh()
 
-        def open_game_dir(self):
-            if self.game:
-                os.startfile(str(self.game.path))
-
-        def open_log(self):
-            p = core.app_home() / "umaru.log"
-            if p.is_file():
-                os.startfile(str(p))
-
-        def make_shortcut(self):
-            if not getattr(sys, "frozen", False):
-                self.banner.show("warn", "Ярлык создаётся только из собранного лаунчера (UmaRU.exe).")
-                return
-            try:
-                lnk = core.create_shortcut(sys.executable, "--play", SHORTCUT_NAME)
-            except core.UmaError as e:
-                self.banner.show("err", str(e))
-                return
-            core.save_settings({"shortcut_done": True})
-            self.banner.show("ok", f"Ярлык «{lnk.stem}» добавлен на рабочий стол.")
-
         def _ensure_shortcut(self):
             if not getattr(sys, "frozen", False):
                 return
@@ -1055,26 +909,7 @@ def build_window(args, pack):
                 tail = []
             self.clipboard_clear()
             self.clipboard_append(text + "\n\n--- журнал ---\n" + "\n".join(tail))
-            self.banner.show("ok", "Отчёт скопирован в буфер обмена: вставьте его в сообщение тому, кто помогает.")
-
-        def uninstall(self):
-            if self.busy or self.game is None:
-                return
-            if not messagebox.askyesno(APP_TITLE, "Удалить русификатор и Hachimi?\n\nHachimi и файлы перевода будут убраны, игра вернётся "
-                                                  "к исходному виду. Саму игру это не затронет, а лаунчер останется: "
-                                                  "русификатор можно будет поставить снова.", icon="warning"):
-                return
-            ctx = core.Context(self.game, self.pack_, installer=hachimi_installer())
-            self.set_busy(True, "Удаляю…")
-
-            def done(result, error):
-                self.set_busy(False)
-                if error is not None:
-                    self.banner.show("err", str(error) + _ADMIN_HINT if isinstance(error, core.NeedAdmin) else str(error))
-                else:
-                    self.banner.show("ok", "Русификатор удалён: " + "; ".join(result))
-                self.refresh()
-            self.run_bg(lambda: core.uninstall(ctx), done)
+            self.banner.show("ok", "Отчёт скопирован: вставьте его в сообщение поддержке.")
 
         def uninstall_everything(self):
             """Всё сразу: Hachimi и перевод из папки игры, ярлык, настройки и сама программа (её папку удалит помощник после выхода)."""
@@ -1145,18 +980,6 @@ def build_window(args, pack):
             x, y = self.winfo_rootx(), self.winfo_rooty()
             ImageGrab.grab(bbox=(x, y, x + self.winfo_width(), y + self.winfo_height()), all_screens=True).save(args.shot)
             self.destroy()
-
-    class _QueueHandler(logging.Handler):
-        def __init__(self, q, box):
-            super().__init__()
-            self.q, self.box = q, box
-
-        def emit(self, record):
-            try:
-                msg, level, stamp = record.getMessage(), record.levelno, time.strftime("%H:%M:%S")
-                self.q.put((self.box.append, (msg, level, stamp)))
-            except Exception:  # noqa: BLE001
-                pass
 
     K.enable_dpi_awareness()
     return App()

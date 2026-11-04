@@ -58,17 +58,13 @@ with tempfile.TemporaryDirectory(dir=HERE) as work, ExitStack() as mocks:
 
         def invoke(self):
             app.menu.invoke(self.index)
-    tl = MenuItem("Проверить обновления перевода")
-    launcher = MenuItem("Проверить обновления лаунчера…")
+    launcher = MenuItem("Проверить обновления")        # одна проверка: лаунчер, затем перевод
     app.update()
     assert not app.btn_launcher.winfo_ismapped()      # кнопка нового лаунчера видна, только когда он вышел
-    tl.invoke()
-    wait_until(app, lambda: not app.busy)
-    assert check.call_count == 1 and download.call_count == proc.call_count == 0
     check.return_value = None
     launcher.invoke()
     wait_until(app, lambda: not app.busy)
-    assert player.APP_VERSION in app.banner_note[1]
+    assert check.call_count == 2 and player.APP_VERSION in app.banner_note[1]
     assert proc.call_count == download.call_count == 0
     offer = SimpleNamespace(version="1.3", size=24_000_000, notes="Тест сезонного оформления.")
     check.return_value = offer
@@ -101,4 +97,4 @@ with tempfile.TemporaryDirectory(dir=HERE) as work, ExitStack() as mocks:
         wait_until(app, lambda: proc.called)
     assert proc.call_count == 1 and proc.call_args.args[0][1:] == ["/UMARUUPDATE"]
     assert download.call_args.args[0] is offer
-    print("PASS: one startup check, no translation-triggered check, checks in the More menu, current, later, errors and explicit handoff")
+    print("PASS: one startup check, one «Проверить обновления» in the More menu, current, later, errors and explicit handoff")
