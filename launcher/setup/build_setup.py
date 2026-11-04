@@ -1,4 +1,4 @@
-"""Build Uma RU Player from public source with externally supplied Hachimi files.
+"""Build the Uma RU launcher from public source with externally supplied Hachimi files.
 
 Run on Windows with PyInstaller, sv-ttk and Inno Setup 6 already installed.
 All generated files go to --build-dir, outside the source checkout.
@@ -60,11 +60,11 @@ def write_version(path: Path, version: str) -> None:
  ffi=FixedFileInfo(filevers=({major}, {minor}, 0, 0), prodvers=({major}, {minor}, 0, 0), mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
  kids=[StringFileInfo([StringTable('041904B0', [
   StringStruct('CompanyName', 'Uma RU'),
-  StringStruct('FileDescription', 'Uma RU Player — установка и запуск русификатора'),
+  StringStruct('FileDescription', 'Лаунчер Uma RU — установка и запуск русского перевода Umamusume'),
   StringStruct('FileVersion', '{version}.0.0'),
   StringStruct('InternalName', 'UmaRU'),
   StringStruct('OriginalFilename', 'UmaRU.exe'),
-  StringStruct('ProductName', 'Uma RU Player'),
+  StringStruct('ProductName', 'Лаунчер Uma RU'),
   StringStruct('ProductVersion', '{version}.0.0')])]), VarFileInfo([VarStruct('Translation', [1049, 1200])])])
 """, encoding="utf-8")
 

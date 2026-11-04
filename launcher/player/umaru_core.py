@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Uma RU Player — ядро программы для игроков: найти игру, поставить/починить Hachimi, разложить готовый перевод.
+"""Лаунчер Uma RU — ядро для игроков: найти игру, поставить/починить Hachimi, разложить готовый перевод.
 
 Только стандартная библиотека (программа собирается в один exe). Само ядро в сеть не ходит: оно раскладывает готовый
 «пакет» (pack.json + pack.zip). В установленной программе пакет скачивает и проверяет umaru_updates.py в кэш
@@ -351,7 +351,7 @@ def run_installer(installer, game_dir, action="install", timeout=180):
     """Официальный установщик Hachimi, без окон. -> (код выхода, вывод). 0 — готово; он молчит, о причине сбоя — только код."""
     installer = Path(installer)
     if not installer.is_file():
-        raise UmaError("Рядом с программой нет установщика Hachimi (data\\hachimi_installer.exe).")
+        raise UmaError("Рядом с лаунчером нет установщика Hachimi (data\\hachimi_installer.exe).")
     args = [str(installer), action, "--install-dir", str(game_dir), "--explicit-target", PROXY_DLL]
     log.info("Запуск установщика Hachimi: %s", " ".join(args[1:]))
     try:   # без cwd: CreateProcess не принимает рабочую папку длиннее MAX_PATH, а установщику она не нужна
@@ -539,8 +539,8 @@ def install_pack(game_dir, pack, rels, progress=None):
                     archives[path] = (zf, set(zf.namelist()))
                 zf, names = archives[path]
                 if rel not in names:
-                    raise UmaError(f"В пакете перевода нет файла {rel}. Нажмите «Обновления перевода» "
-                                   "или переустановите программу.")
+                    raise UmaError(f"В пакете перевода нет файла {rel}. Проверьте обновления перевода "
+                                   "или переустановите лаунчер.")
                 return zf.open(rel)
 
             for n, rel in enumerate(rels, 1):
@@ -567,8 +567,8 @@ def install_pack(game_dir, pack, rels, progress=None):
     except PermissionError as e:
         raise NeedAdmin("В папку игры нельзя записывать без прав администратора.") from e
     except zipfile.BadZipFile as e:
-        raise UmaError("Архив перевода pack.zip повреждён. Нажмите «Обновления перевода» "
-                       "или переустановите программу.") from e
+        raise UmaError("Архив перевода pack.zip повреждён. Проверьте обновления перевода "
+                       "или переустановите лаунчер.") from e
 
 
 # ---------------------------------------------------------------- выбор языков по разделам
@@ -797,7 +797,7 @@ def diagnose(ctx, deep=False, progress=None):
     blocked = ""
     running = process_running()
     if game.steam_updating:
-        blocked = "Steam сейчас обновляет игру. Дождитесь конца обновления и откройте программу снова."
+        blocked = "Steam сейчас обновляет игру. Дождитесь конца обновления и откройте лаунчер снова."
         checks.append(Check("steam", "warn", "Steam", "Идёт обновление игры — подождите его конца."))
     elif running:
         blocked = "Игра запущена. Закройте её, чтобы изменить файлы."
@@ -826,7 +826,7 @@ def diagnose(ctx, deep=False, progress=None):
         checks.append(Check("pack", "info", "Перевод", f"Установлена версия {state['pack_version']}."))
     elif pack is None:
         message = ("Ожидаю загрузки выпуска из канала обновлений." if ctx.online else
-                   "Рядом с программой нет папки data. Распакуйте архив целиком и запустите UmaRU.exe из этой папки.")
+                   "Рядом с лаунчером нет папки data. Распакуйте архив целиком и запустите UmaRU.exe из этой папки.")
         checks.append(Check("pack", "warn" if ctx.online else "fail", "Перевод", message))
     else:
         ps = pack_status(game.path, pack, deep=deep, progress=progress)
@@ -889,7 +889,7 @@ def diagnose(ctx, deep=False, progress=None):
 def game_write_lock(game_dir):
     """Serialize writers for this game, including the elevated master and CLI."""
     key = hashlib.sha256(os.path.normcase(str(Path(game_dir).resolve())).encode('utf-8')).hexdigest()
-    busy = "Другой мастер уже меняет файлы этой игры. Дождитесь завершения и повторите."
+    busy = "Другая копия лаунчера уже меняет файлы этой игры. Дождитесь завершения и повторите."
     if os.name != 'nt':
         import fcntl
         with open(Path(tempfile.gettempdir()) / ('umaru-' + key + '.lock'), 'a+b') as lock:
@@ -962,8 +962,8 @@ def _apply_plan(ctx, plan, progress=None, deep=False):
         a, b = spans["hachimi"]
         report(a, "Устанавливаем Hachimi…")
         if pack is None or not pack.installer.is_file():
-            raise UmaError("Нет установщика Hachimi рядом с программой (data\\hachimi_installer.exe). "
-                           "Переустановите программу.")
+            raise UmaError("Нет установщика Hachimi рядом с лаунчером (data\\hachimi_installer.exe). "
+                           "Переустановите лаунчер.")
         check_writable(game.path)
         exe, old = game.path / GAME_EXE, game.path / OLD_EXE
         stub_copy = None
@@ -1056,7 +1056,7 @@ def _uninstall(ctx, remove_translation=True, progress=None):
             code, _out = run_installer(installer, game.path, "uninstall")   # вернёт заглушку Steam на место exe
             done.append("Hachimi удалён" if code == 0 else f"Установщик Hachimi вернул код {code}")
         else:
-            done.append("Hachimi остался в папке игры: рядом с программой нет установщика Hachimi")
+            done.append("Hachimi остался в папке игры: рядом с лаунчером нет установщика Hachimi")
     elif hs.kind in ("stub_restored", "dll_missing"):
         # exe уже оригинальный (после обновления игры) или Hachimi без библиотеки: убираем остатки сами. Старый .old.exe при
         # обновлении устарел — выбросить, а не возвращать поверх нового exe.
@@ -1273,18 +1273,18 @@ def uninstall_all(ctx, program=None, progress=None):
             pass
     pid = program.get("pid") or os.getpid()
     if program.get("uninstaller"):
-        done.append("Программу, её настройки и кэш перевода удалит деинсталлятор Windows сразу после закрытия окна")
+        done.append("Лаунчер, его настройки и кэш перевода удалит деинсталлятор Windows сразу после закрытия окна")
         return done, {"uninstaller": Path(program["uninstaller"]), "pid": pid}
     items, dirs, left = program_items(program["dir"], program["exe"], ctx.pack)
     items.append(app_home())                         # настройки и журнал: журнал открыт у нас, поэтому удалит помощник
-    done.append("Программа и её настройки будут удалены сразу после закрытия окна")
+    done.append("Лаунчер и его настройки будут удалены сразу после закрытия окна")
     if left:
-        done.append("В папке программы лежат чужие файлы, они остаются: " + ", ".join(sorted(p.name for p in left)[:5]))
+        done.append("В папке лаунчера лежат чужие файлы, они остаются: " + ", ".join(sorted(p.name for p in left)[:5]))
     return done, {"items": items, "dirs": dirs, "pid": pid}
 
 
 def diagnostics_text(report, pack=None):
-    lines = [f"Uma RU Player · {time.strftime('%Y-%m-%d %H:%M:%S')}", f"Windows: {sys.getwindowsversion().major}."
+    lines = [f"Лаунчер Uma RU · {time.strftime('%Y-%m-%d %H:%M:%S')}", f"Windows: {sys.getwindowsversion().major}."
              f"{sys.getwindowsversion().minor}.{sys.getwindowsversion().build}" if hasattr(sys, "getwindowsversion") else ""]
     if pack:
         lines.append(f"Пакет перевода: {pack.version}")

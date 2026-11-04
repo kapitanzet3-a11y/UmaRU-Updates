@@ -547,10 +547,10 @@ def publish(args: argparse.Namespace) -> None:
     release = remote_release(repo, tag)
     if release is None:
         notes = (f"[Скачать установщик для Windows](https://github.com/{repo}/releases/latest/download/UmaRU-Setup.exe)\n\n"
-                 "Если UmaRU с онлайн-обновлениями уже установлен, откройте ярлык "
-                 "«Играть на русском (Uma RU)». Мастер сам проверит и установит перевод.\n\n"
+                 "Если лаунчер Uma RU уже установлен, откройте ярлык "
+                 "«Играть на русском (Uma RU)». Лаунчер сам проверит и установит перевод.\n\n"
                  f"<!-- {marker} -->")
-        gh("release", "create", tag, "--repo", repo, "--draft", "--title", f"UmaRU {tag}", "--notes", notes)
+        gh("release", "create", tag, "--repo", repo, "--draft", "--title", f"Перевод Uma RU {tag}", "--notes", notes)
         release = remote_release(repo, tag)
     if not release or not release.get("draft") or marker not in release.get("body", ""):
         fail("Release is published or draft identity does not match; refusing to overwrite")
@@ -608,8 +608,8 @@ def publish_launcher(args: argparse.Namespace) -> None:
     release = remote_release(repo, tag)
     if release is None:
         notes = (f"[Скачать установщик для Windows](https://github.com/{repo}/releases/latest/download/UmaRU-Setup.exe)\n\n"
-                 f"Версия мастера: {offer.version}. {offer.notes}\n\n<!-- {marker} -->")
-        gh("release", "create", tag, "--repo", repo, "--draft", "--title", f"UmaRU Launcher {offer.version}", "--notes", notes)
+                 f"Версия лаунчера: {offer.version}. {offer.notes}\n\n<!-- {marker} -->")
+        gh("release", "create", tag, "--repo", repo, "--draft", "--title", f"Лаунчер Uma RU {offer.version}", "--notes", notes)
         release = remote_release(repo, tag)
     if not release or not release.get("draft") or marker not in release.get("body", ""):
         fail("Launcher release is published or draft identity does not match")

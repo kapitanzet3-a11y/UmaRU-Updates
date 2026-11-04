@@ -242,6 +242,65 @@ class StatusRow(ttk.Frame):
             self.title_label.configure(text=title)
 
 
+class StatusSummary(ttk.Frame):
+    """Главное состояние экрана одной строкой: крупный значок цветом состояния, заголовок и пояснение. Значок различается
+    и формой (галочка, «!», «i», крестик, многоточие), а не только цветом. Подробности по частям — в StatusRow."""
+
+    GLYPHS = {"ok": "check", "warn": "bang", "fail": "cross", "err": "cross", "info": "info", "busy": "dots", "off": "dots"}
+
+    def __init__(self, parent, title="", detail="", state="busy"):
+        super().__init__(parent)
+        self.columnconfigure(1, weight=1)
+        self.size = px(40)
+        self.icon = tk.Canvas(self, width=self.size, height=self.size, highlightthickness=0, bg=THEME.bg)
+        self.icon.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, px(14)), pady=(px(2), 0))
+        self.title_label = ttk.Label(self, text=title, style="Title.TLabel")
+        self.title_label.grid(row=0, column=1, sticky="w")
+        self.detail_label = HintLabel(self, detail)
+        self.detail_label.grid(row=1, column=1, sticky="we")
+        self.status = state  # не state: так называется метод ttk-виджета
+        self.set(state)
+
+    def set(self, state=None, title=None, detail=None):
+        if state is not None:
+            self.status = state
+            self._draw()
+        if title is not None:
+            self.title_label.configure(text=title)
+        if detail is not None:
+            self.detail_label.configure(text=detail)
+
+    def _draw(self):
+        c, s = self.icon, self.size
+        c.delete("all")
+        c.create_oval(1, 1, s - 1, s - 1, fill=THEME.color(self.status), outline="")
+        ink, w = THEME.bg, max(2, px(4))   # знак цветом фона: читается и в светлой, и в тёмной теме
+
+        def at(x, y):
+            return x * s, y * s
+
+        def dot(x, y, r):
+            cx, cy = at(x, y)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=ink, outline="")
+
+        glyph = self.GLYPHS.get(self.status, "dots")
+        if glyph == "check":
+            c.create_line(*at(.28, .52), *at(.44, .67), *at(.72, .36), fill=ink, width=w, capstyle="round",
+                          joinstyle="round")
+        elif glyph == "cross":
+            for a, b in (((.33, .33), (.67, .67)), ((.67, .33), (.33, .67))):
+                c.create_line(*at(*a), *at(*b), fill=ink, width=w, capstyle="round")
+        elif glyph == "bang":
+            c.create_line(*at(.5, .25), *at(.5, .56), fill=ink, width=w, capstyle="round")
+            dot(.5, .73, w * .7)
+        elif glyph == "info":
+            dot(.5, .28, w * .7)
+            c.create_line(*at(.5, .45), *at(.5, .74), fill=ink, width=w, capstyle="round")
+        else:
+            for x in (.3, .5, .7):
+                dot(x, .5, w * .6)
+
+
 class Banner(tk.Frame):
     """Плашка-сообщение: цветная полоса слева, текст, необязательная кнопка действия. Класть только через grid()."""
 
@@ -427,11 +486,11 @@ def _demo(shot=None):
     root = tk.Tk()
     apply_theme(root)
     set_window_icon(root)
-    root.title("Uma RU — проверка оформления")
+    root.title("Лаунчер Uma RU — проверка оформления")
     center_window(root, 560, 760)
     outer = ttk.Frame(root, padding=px(20))
     outer.pack(fill="both", expand=True)
-    Header(outer, "Русификатор Umamusume", "Перевод от 29.10.2026 · Hachimi 0.33.1").pack(fill="x")
+    Header(outer, "Uma RU", "Русский перевод Umamusume · полный вариант").pack(fill="x")
     card = Card(outer, "Состояние", "Всё проверяется автоматически при запуске")
     card.pack(fill="x", pady=(px(16), 0))
     for title, detail, state in (("Игра", "Найдена: C:\\Program Files (x86)\\Steam\\steamapps\\common\\UmamusumePrettyDerby_Jpn", "ok"),

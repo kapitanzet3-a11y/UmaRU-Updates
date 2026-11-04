@@ -9,9 +9,9 @@
 
 [Setup]
 AppId={{A54CA8D0-92CF-491B-BDB5-280DBA0E91D4}
-AppName=Uma RU Player
+AppName=Лаунчер Uma RU
 AppVersion={#LauncherVersion}
-AppVerName=Uma RU Player {#LauncherVersion}
+AppVerName=Лаунчер Uma RU {#LauncherVersion}
 VersionInfoVersion={#LauncherVersion}.0.0
 AppPublisher=Uma RU
 DefaultDirName={localappdata}\Programs\UmaRU
@@ -40,20 +40,24 @@ WizardImageStretch=yes
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Messages]
-ConfirmUninstall=Удалить %1?%n%nHachimi и русский перевод тоже будут убраны из папки игры, игра вернётся к исходному виду. Сама игра и ваш прогресс в ней не пострадают.
+ConfirmUninstall=Удалить лаунчер Uma RU?%n%nHachimi и русский перевод тоже будут убраны из папки игры, игра вернётся к исходному виду. Сама игра и ваш прогресс в ней не пострадают.
 
 [Files]
 Source: "{#SetupRoot}\stage\UmaRU\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
+[InstallDelete]
+; До версии 1.3 ярлык в «Пуске» назывался «Uma RU Player»: убираем его, чтобы не было двух
+Type: files; Name: "{group}\Uma RU Player.lnk"
+
 [Icons]
-Name: "{group}\Uma RU Player"; Filename: "{app}\UmaRU.exe"; IconFilename: "{app}\UmaRU.exe"
+Name: "{group}\Лаунчер Uma RU"; Filename: "{app}\UmaRU.exe"; IconFilename: "{app}\UmaRU.exe"
 Name: "{userdesktop}\Играть на русском (Uma RU)"; Filename: "{app}\UmaRU.exe"; Parameters: "--play"; Tasks: desktopicon; IconFilename: "{app}\UmaRU.exe"
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык «Играть на русском» на рабочем столе"; GroupDescription: "Дополнительные задачи:"
 
 [Run]
-Filename: "{app}\UmaRU.exe"; Description: "Открыть Uma RU Player"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\UmaRU.exe"; Description: "Открыть лаунчер Uma RU"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: files; Name: "{app}\data\update-channel.json"
@@ -62,7 +66,7 @@ Type: filesandordirs; Name: "{localappdata}\UmaRU"
 
 [Code]
 const
-  { То же имя, что INSTANCE_MUTEX в player/umaru_app.py: мьютекс держит открытое окно Uma RU Player. }
+  { То же имя, что INSTANCE_MUTEX в player/umaru_app.py: мьютекс держит открытое окно лаунчера. }
   PlayerMutex = 'UmaRUPlayerSingleInstance';
 
 var
@@ -80,10 +84,10 @@ begin
     if not CheckForMutexes(PlayerMutex) then Exit;
     Sleep(200);
   end;
-  { Открытое окно держит UmaRU.exe и свои библиотеки: удалить их не получится. }
+  { Открытое окно лаунчера держит UmaRU.exe и свои библиотеки: удалить их не получится. }
   while CheckForMutexes(PlayerMutex) do
   begin
-    if UninstallSilent or (MsgBox('Закройте окно Uma RU Player и нажмите «ОК».', mbError, MB_OKCANCEL) <> IDOK) then
+    if UninstallSilent or (MsgBox('Закройте окно лаунчера Uma RU и нажмите «ОК».', mbError, MB_OKCANCEL) <> IDOK) then
     begin
       Result := False;
       Exit;
@@ -116,7 +120,7 @@ function InitializeSetup: Boolean;
 begin
   Result := (Pos('/umaruupdate', LowerCase(GetCmdTail)) = 0) or not IsAdmin;
   if not Result then
-    MsgBox('Откройте Uma RU Player без прав администратора и повторите обновление.', mbError, MB_OK);
+    MsgBox('Откройте лаунчер Uma RU без прав администратора и повторите обновление.', mbError, MB_OK);
 end;
 
 function ChannelPath: String;
@@ -147,7 +151,7 @@ var
 begin
   VariantPage := CreateInputOptionPage(wpSelectDir, 'Вариант перевода',
     'Выберите объём перевода',
-    'Пакет перевода загрузится через интернет при первом запуске программы. ' +
+    'Пакет перевода загрузится через интернет при первом запуске лаунчера. ' +
     'При обновлении выбор сохраняется.', True, False);
   VariantPage.Add('Полный перевод');
   VariantPage.Add('Облегчённый перевод');

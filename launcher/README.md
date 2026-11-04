@@ -1,4 +1,4 @@
-# Исходный код UmaRU Launcher 1.3 для Windows
+# Исходный код лаунчера Uma RU 1.3 для Windows
 
 Лаунчер запускает японскую Steam-версию Umamusume с русским переводом. Модули в `player/` отвечают за окно, установку перевода и проверку обновлений. Общие компоненты Tk и значок находятся в `ui_kit.py` и `ui_icon.py`.
 
@@ -15,7 +15,7 @@ python player/umaru_app.py
 
 Игрок выбирает язык по разделам (тексты, надписи на картинках, комиксы, ролик) в окне «Языки перевода». Выбор хранится в `%LOCALAPPDATA%\UmaRU\settings.json`; японский раздел лаунчер не кладёт в игру. Разделы файлов описаны в `umaru_core.content_part()`.
 
-Для проверки без открытия игры используйте `python player/umaru_app.py --check --json report.json`. В установленном мастере адрес канала и вариант перевода задаёт Inno Setup в `data/update-channel.json`.
+Для проверки без открытия игры используйте `python player/umaru_app.py --check --json report.json`. В установленном лаунчере адрес канала и вариант перевода задаёт Inno Setup в `data/update-channel.json`.
 
 ## Сборка установщика
 

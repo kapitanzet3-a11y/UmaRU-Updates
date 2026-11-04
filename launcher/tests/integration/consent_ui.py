@@ -50,9 +50,18 @@ with tempfile.TemporaryDirectory(dir=HERE) as work, ExitStack() as mocks:
     proc = mocks.enter_context(patch.object(player.subprocess, "Popen"))
     # Version check runs once at startup, like other launchers; nothing is downloaded or started.
     assert check.call_count == 1 and download.call_count == proc.call_count == 0
-    tl, launcher = app.update_buttons
-    assert tl.winfo_y() == launcher.winfo_y() and launcher.winfo_x() >= tl.winfo_width()
-    assert launcher.winfo_x() + launcher.winfo_width() <= launcher.master.winfo_width()
+    class MenuItem:
+        """Пункт меню «Дополнительно»: проверки обновлений живут там, а не кнопками в окне."""
+        def __init__(self, label):
+            self.index = next(i for i in range(app.menu.index("end") + 1)
+                              if app.menu.type(i) == "command" and app.menu.entrycget(i, "label") == label)
+
+        def invoke(self):
+            app.menu.invoke(self.index)
+    tl = MenuItem("Проверить обновления перевода")
+    launcher = MenuItem("Проверить обновления лаунчера…")
+    app.update()
+    assert not app.btn_launcher.winfo_ismapped()      # кнопка нового лаунчера видна, только когда он вышел
     tl.invoke()
     wait_until(app, lambda: not app.busy)
     assert check.call_count == 1 and download.call_count == proc.call_count == 0
@@ -68,7 +77,9 @@ with tempfile.TemporaryDirectory(dir=HERE) as work, ExitStack() as mocks:
         wait_until(app, lambda: app.grab_current() is not None)
         return app.grab_current()
     action(open_offer(), "Позже").invoke()
+    app.update()
     assert app.winfo_exists() and not app.busy and proc.call_count == download.call_count == 0
+    assert app.btn_launcher.winfo_ismapped() and app.btn_launcher.cget("text") == "Новый лаунчер 1.3…"
     check.side_effect = player.launcher.LauncherUpdateError("Подпись не прошла проверку")
     launcher.invoke()
     wait_until(app, lambda: not app.busy)
@@ -90,4 +101,4 @@ with tempfile.TemporaryDirectory(dir=HERE) as work, ExitStack() as mocks:
         wait_until(app, lambda: proc.called)
     assert proc.call_count == 1 and proc.call_args.args[0][1:] == ["/UMARUUPDATE"]
     assert download.call_args.args[0] is offer
-    print("PASS: one startup check, no translation-triggered check, adjacent visible buttons, current, later, errors and explicit handoff")
+    print("PASS: one startup check, no translation-triggered check, checks in the More menu, current, later, errors and explicit handoff")

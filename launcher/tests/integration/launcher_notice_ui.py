@@ -51,7 +51,8 @@ def scenario(play, snoozed=False, accept=False):
             player.snooze_launcher("9.9")
         app = player.build_window(SimpleNamespace(shot="", play=play, auto=False, shot_after=0, game_dir=""), None)
         wait_until(app, lambda: app.auto_done and app.launcher_checked)
-        assert app.btn_launcher.cget("text") == "Новый лаунчер 9.9…"
+        app.update()
+        assert app.btn_launcher.cget("text") == "Новый лаунчер 9.9…" and app.btn_launcher.winfo_ismapped()
         if play:
             app._launch()                       # то, что делает ярлык «Играть», когда игра готова
         dialog = app.grab_current()
