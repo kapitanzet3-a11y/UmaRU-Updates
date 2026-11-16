@@ -1,8 +1,15 @@
-# UmaRU для Windows
+# UmaRU
 
-Русский перевод японской Steam-версии Umamusume: Pretty Derby.
+Русский перевод японской версии Umamusume: Pretty Derby.
 
-**[Скачать установщик для Windows](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/latest/download/UmaRU-Setup.exe)**
+- **[Скачать для Windows (.exe)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/latest/download/UmaRU-Setup.exe)**
+- **[Скачать для Android (.apk)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/download/android-launcher/UmaRU_Android_Installer_0.21.apk)**
+
+## Установка на Android
+
+Откройте APK на телефоне и следуйте подсказкам мастера UmaRU. Обновления перевода можно скачать в приложении.
+
+## Установка на Windows
 
 1. Закройте игру, запустите `UmaRU-Setup.exe` и выберите полный или облегчённый перевод.
 2. Откройте ярлык **«Играть на русском (Uma RU)»**. При первом запуске мастеру потребуется интернет. На чистой установке игры нажмите **«Установить русификатор»**. Если перевод уже установлен, мастер сможет использовать подходящие файлы с компьютера.
