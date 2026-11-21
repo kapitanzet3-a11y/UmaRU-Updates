@@ -7,15 +7,21 @@
 | Платформа | Скачать | Что делать дальше |
 | --- | --- | --- |
 | Windows | [Скачать установщик (.exe)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/latest/download/UmaRU-Setup.exe) | Закройте игру, запустите установщик и выберите полный или облегчённый перевод. Откройте ярлык **«Играть на русском (Uma RU)»** и следуйте подсказкам. Для первой загрузки нужен интернет. |
-| Android | [Скачать установщик (.apk)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/download/android-launcher/UmaRU_Android_Installer_0.21.apk) | Откройте APK на телефоне и следуйте подсказкам мастера. Обновления перевода доступны в приложении. |
+| Android | [Скачать мастер 0.23 (.apk, 34,6 МБ)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/download/android-launcher/UmaRU_Android_Installer_0.23.apk) | Установите APK и откройте мастер. При первой установке он скачает перевод онлайн (около 516 МБ для r5.15). |
+
+Если мастер уже установлен на телефоне, откройте **Обновления → Проверить обновление мастера** и подтвердите установку новой версии в Android. Сохраните выбранную папку игры. При следующих обновлениях мастер использует имеющиеся файлы и докачивает изменения. Прерванная загрузка продолжается с места остановки.
+
+На сети, которую Android считает безлимитной, мастер в фоне проверяет и загружает обновления перевода и самого приложения. Готовый перевод применяется при следующем открытии мастера.
 
 Обновление самого лаунчера на Windows устанавливается по вашему выбору. Для ручной проверки откройте **Дополнительно → Проверить обновления**. Если у вас ещё версия 1.1, один раз установите новый лаунчер поверх старого: выбранный вариант перевода сохранится.
 
-[История лаунчера для Windows (1.x)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases?q=tag%3Alauncher-v1) · [Лаунчер для Android](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/tag/android-launcher) · [Исходный код лаунчера для Windows](https://github.com/kapitanzet3-a11y/UmaRU-Updates/tree/launcher-source/launcher)
+[История лаунчера для Windows (1.x)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases?q=tag%3Alauncher-v1) · [Лаунчер для Android](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/tag/android-launcher)
+
+**Исходники** · [Лаунчер Windows](https://github.com/kapitanzet3-a11y/UmaRU-Updates/tree/launcher-source/launcher) · [Исходники Android 0.23 в ZIP](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/download/android-launcher/UmaRU_Phone_Installer_0.23_sources.zip)
 
 ## Перевод: обновления и пакеты
 
-**[Выпуски перевода (r5.x)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases?q=tag%3Ar5)**
+[Скачать актуальный перевод](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases/latest) · **[Выпуски перевода (r5.x)](https://github.com/kapitanzet3-a11y/UmaRU-Updates/releases?q=tag%3Ar5)**
 
 На Windows запускайте игру через **«Играть на русском (Uma RU)»**. Лаунчер проверит перевод перед запуском. Если для вашей версии есть подходящий пакет изменений, он скачает его; иначе потребуется полный пакет выбранного варианта. Без интернета можно играть с уже установленным переводом.
 
